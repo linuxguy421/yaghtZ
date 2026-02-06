@@ -121,7 +121,7 @@ class YahtzeeScorecard(QMainWindow):
     def __init__(self, players):
         super().__init__()
         self.players = players
-        self.setWindowTitle("Yahtzee! Dropdown Pro")
+        self.setWindowTitle("Yahtzee!")
         self.resize(1000, 900)
         
         central_widget = QWidget()

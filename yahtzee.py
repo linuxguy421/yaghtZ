@@ -16,6 +16,7 @@ CLR_ERROR = "#660000"
 CLR_TOTAL_BG = "#000000"
 CLR_ACCENT = "#03DAC6"     # Teal
 CLR_CLAIMED_TEXT = "#BB86FC" # Purple
+CLR_ACTIVE_TURN = "#FFD700"  # Gold for active player
 
 DARK_STYLESHEET = f"""
     QMainWindow, QDialog, QWidget {{ 
@@ -77,27 +78,22 @@ class PlayerSetupDialog(QDialog):
         self.setFixedSize(400, 500)
         self.player_inputs = [] 
         layout = QVBoxLayout(self)
-        
         header = QLabel("Player Registration")
         header.setFont(QFont("Arial", 14, QFont.Weight.Bold))
         header.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(header)
-
         self.scroll_area = QScrollArea()
         self.scroll_widget = QWidget()
         self.input_layout = QVBoxLayout(self.scroll_widget)
         self.scroll_area.setWidget(self.scroll_widget)
         self.scroll_area.setWidgetResizable(True)
         layout.addWidget(self.scroll_area)
-        
         self.add_player_slot()
-        
         btn_layout = QHBoxLayout()
         add_btn = QPushButton("+ Add Player"); add_btn.clicked.connect(self.add_player_slot)
         rem_btn = QPushButton("- Remove Player"); rem_btn.clicked.connect(self.remove_player_slot)
         btn_layout.addWidget(add_btn); btn_layout.addWidget(rem_btn)
         layout.addLayout(btn_layout)
-        
         start_btn = QPushButton("Start Game")
         start_btn.setStyleSheet(f"background-color: {CLR_ACCENT}; color: black;")
         start_btn.clicked.connect(self.accept)
@@ -121,12 +117,20 @@ class YahtzeeScorecard(QMainWindow):
     def __init__(self, players):
         super().__init__()
         self.players = players
+        self.current_turn_index = 0
         self.setWindowTitle("Yahtzee!")
         self.resize(1000, 900)
         
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
+
+        # Status Label
+        self.turn_label = QLabel(f"Current Turn: {self.players[0]}")
+        self.turn_label.setFont(QFont("Arial", 12, QFont.Weight.Bold))
+        self.turn_label.setStyleSheet(f"color: {CLR_ACTIVE_TURN}; padding: 10px;")
+        self.turn_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        main_layout.addWidget(self.turn_label)
 
         self.table = QTableWidget(len(ROW_LABELS), len(players))
         self.table.setVerticalHeaderLabels(ROW_LABELS)
@@ -137,10 +141,12 @@ class YahtzeeScorecard(QMainWindow):
         main_layout.addWidget(self.table)
 
         btn_row = QHBoxLayout()
-        save_btn = QPushButton("💾 Export Results (TXT)"); save_btn.clicked.connect(self.export_results)
+        save_btn = QPushButton("💾 Export Results"); save_btn.clicked.connect(self.export_results)
         reset_btn = QPushButton("🔄 Reset Game"); reset_btn.setStyleSheet("background-color: #CF6679; color: black;"); reset_btn.clicked.connect(self.reset_game)
         btn_row.addWidget(save_btn); btn_row.addWidget(reset_btn)
         main_layout.addLayout(btn_row)
+        
+        self.update_turn_highlight()
 
     def setup_table_cells(self):
         for row in range(self.table.rowCount()):
@@ -152,19 +158,15 @@ class YahtzeeScorecard(QMainWindow):
                     item.setForeground(QBrush(QColor(CLR_ACCENT)))
                     font = item.font(); font.setBold(True); item.setFont(font)
                     self.table.setItem(row, col, item)
-                
-                elif 0 <= row <= 5: # Upper Section Dropdowns
+                elif 0 <= row <= 5: 
                     combo = QComboBox()
                     combo.addItems(["-", "0", "1", "2", "3", "4", "5"])
                     combo.setProperty("row", row)
                     combo.setProperty("col", col)
                     combo.currentIndexChanged.connect(self.handle_combo_change)
                     self.table.setCellWidget(row, col, combo)
-                    # Invisible item for value tracking
-                    item = QTableWidgetItem("-")
-                    self.table.setItem(row, col, item)
-
-                else: # Lower Section
+                    self.table.setItem(row, col, QTableWidgetItem("-"))
+                else:
                     item = QTableWidgetItem("-")
                     item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                     item.setBackground(QColor(CLR_UNCLAIMED))
@@ -173,14 +175,33 @@ class YahtzeeScorecard(QMainWindow):
                         item.setCheckState(Qt.CheckState.Unchecked)
                     self.table.setItem(row, col, item)
 
+    def update_turn_highlight(self):
+        """Visually updates the header to show whose turn it is."""
+        self.turn_label.setText(f"Current Turn: {self.players[self.current_turn_index]}")
+        for i in range(len(self.players)):
+            header_item = QTableWidgetItem(self.players[i])
+            if i == self.current_turn_index:
+                header_item.setForeground(QBrush(QColor(CLR_ACTIVE_TURN)))
+                header_item.setText(f"▶ {self.players[i]}")
+            else:
+                header_item.setForeground(QBrush(QColor(CLR_CLAIMED_TEXT)))
+            self.table.setHorizontalHeaderItem(i, header_item)
+
+    def advance_turn(self, cell_col):
+        """Advances turn only if the cell modified belongs to the current player."""
+        if cell_col == self.current_turn_index:
+            self.current_turn_index = (self.current_turn_index + 1) % len(self.players)
+            self.update_turn_highlight()
+
     def handle_combo_change(self, index):
         combo = self.sender()
-        row = combo.property("row")
-        col = combo.property("col")
+        row, col = combo.property("row"), combo.property("col")
         text = combo.currentText()
         
         self.table.blockSignals(True)
         item = self.table.item(row, col)
+        was_unclaimed = item.text() == "-"
+        
         if text == "-":
             item.setText("-")
             combo.setStyleSheet(f"background-color: {CLR_UNCLAIMED}; color: white;")
@@ -188,6 +209,7 @@ class YahtzeeScorecard(QMainWindow):
             score = int(text) * (row + 1)
             item.setText(str(score))
             combo.setStyleSheet(f"background-color: {CLR_TABLE}; color: {CLR_CLAIMED_TEXT}; font-weight: bold;")
+            if was_unclaimed: self.advance_turn(col)
         
         self.calculate_column(col)
         self.check_game_over()
@@ -196,7 +218,8 @@ class YahtzeeScorecard(QMainWindow):
     def handle_item_change(self, item):
         self.table.blockSignals(True)
         row, col = item.row(), item.column()
-
+        was_unclaimed = item.data(Qt.ItemDataRole.UserRole) == "-" or item.toolTip() != "Claimed"
+        
         if row in FIXED_SCORE_ROWS:
             item.setText(str(FIXED_SCORE_ROWS[row]) if item.checkState() == Qt.CheckState.Checked else "-")
 
@@ -204,16 +227,18 @@ class YahtzeeScorecard(QMainWindow):
         if row not in CALCULATED_ROWS and not (0 <= row <= 5):
             if text == "-":
                 item.setBackground(QColor(CLR_UNCLAIMED))
-                item.setForeground(QBrush(QColor("#E0E0E0")))
+                item.setToolTip("")
             else:
                 try:
                     val = int(text)
                     valid, msg = self.validate_score(row, val)
                     item.setBackground(QColor(CLR_ERROR if not valid else CLR_TABLE))
                     item.setForeground(QBrush(QColor(CLR_CLAIMED_TEXT if valid else "#FFFFFF")))
-                    if not valid: item.setToolTip(msg)
-                except ValueError:
-                    item.setText("-")
+                    if valid:
+                        if was_unclaimed: self.advance_turn(col)
+                        item.setToolTip("Claimed")
+                    else: item.setToolTip(msg)
+                except ValueError: item.setText("-")
 
         self.calculate_column(col)
         self.check_game_over()
@@ -221,8 +246,7 @@ class YahtzeeScorecard(QMainWindow):
 
     def validate_score(self, row, val):
         if val == 0: return True, ""
-        if row in [9, 10, 16]:
-            if val < 0 or val > 30: return False, "Range is 0-30"
+        if row in [9, 10, 16] and (val < 0 or val > 30): return False, "Range is 0-30"
         return True, ""
 
     def calculate_column(self, col):
@@ -238,9 +262,7 @@ class YahtzeeScorecard(QMainWindow):
 
     def get_val(self, r, c):
         item = self.table.item(r, c)
-        if not item: return 0
-        txt = item.text()
-        return int(txt) if txt.isdigit() else 0
+        return int(item.text()) if item and item.text().isdigit() else 0
 
     def check_game_over(self):
         for col in range(self.table.columnCount()):
@@ -263,8 +285,10 @@ class YahtzeeScorecard(QMainWindow):
 
     def reset_game(self):
         if QMessageBox.question(self, "Confirm", "Start over?") == QMessageBox.StandardButton.Yes:
+            self.current_turn_index = 0
             self.table.blockSignals(True)
             self.setup_table_cells()
+            self.update_turn_highlight()
             self.table.blockSignals(False)
 
 if __name__ == "__main__":

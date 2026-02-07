@@ -12,7 +12,8 @@ from PyQt6.QtGui import QColor, QFont, QBrush
 # --- Theme Configuration ---
 CLR_BACKGROUND = "#121212"
 CLR_TABLE = "#1E1E1E"
-CLR_UNCLAIMED = "#2A2A2A"
+CLR_UNCLAIMED = "#2A2A2A"          # Dimmed gray for waiting players
+CLR_ACTIVE_UNCLAIMED = "#3D3D3D"   # Lightened highlight for active player
 CLR_ERROR = "#B00020"
 CLR_TOTAL_BG = "#000000"
 CLR_ACCENT = "#03DAC6"
@@ -34,6 +35,10 @@ UPPER_SECTION = [0, 1, 2, 3, 4, 5]
 FIXED_SCORE_ROWS = {11: 25, 12: 30, 13: 40, 14: 50}
 MANUAL_INPUT_ROWS = [9, 10, 15, 16] 
 CALCULATED_ROWS = [6, 7, 8, 17, 18]
+
+# Logic for the 13 rounds that actually count as a "turn"
+PRIMARY_CATEGORIES = [0, 1, 2, 3, 4, 5, 9, 10, 11, 12, 13, 14, 16]
+
 ROW_LABELS = (["Ones", "Twos", "Threes", "Fours", "Fives", "Sixes"] + 
               ["Sum", "Bonus (35)", "Total Upper"] + 
               ["3 of a Kind", "4 of a Kind", "Full House", "Small Straight", 
@@ -229,19 +234,11 @@ class YahtzeeScorecard(QMainWindow):
         combo = self.sender()
         r, c = combo.property("row"), combo.property("col")
 
-        # --- TURN ENFORCEMENT PATCH ---
-        # If the user tries to change a dropdown for a player whose turn it ISN'T, revert immediately.
         if c != self.current_turn_index:
-            # We can't easily revert the combo text without a complex variable,
-            # so we just return. The visual change might stay until clicked again,
-            # but no logic runs, no score is set, no turn advances.
-            # To be cleaner, we can force reset:
             self.table.blockSignals(True)
-            combo.setCurrentIndex(0) # Reset to "-" or whatever was first if we want strict
-            # Or better, just ignore the logic so it does nothing.
+            combo.setCurrentIndex(0) 
             self.table.blockSignals(False)
             return
-        # ------------------------------
 
         text = combo.currentText()
         if text == "-": return
@@ -257,7 +254,6 @@ class YahtzeeScorecard(QMainWindow):
         
         item.setText(str(score))
         item.setData(Qt.ItemDataRole.UserRole, "claimed")
-        combo.setStyleSheet(f"background-color: {CLR_TABLE}; color: {CLR_CLAIMED_TEXT}; font-weight: bold;")
         
         # YAHTZEE BONUS LOGIC
         if r == 14: 
@@ -281,13 +277,11 @@ class YahtzeeScorecard(QMainWindow):
     def handle_manual_entry(self, item):
         r, c = item.row(), item.column()
         
-        # --- TURN ENFORCEMENT PATCH ---
         if c != self.current_turn_index:
             self.table.blockSignals(True)
-            item.setText("-") # Revert immediately
+            item.setText("-") 
             self.table.blockSignals(False)
             return
-        # ------------------------------
 
         if r not in MANUAL_INPUT_ROWS or item.text() == "-": return
 
@@ -296,19 +290,18 @@ class YahtzeeScorecard(QMainWindow):
             val = int(item.text())
             valid = True
             
-            # Validation Rules
             if r in [9, 10, 16] and (val < 0 or val > 30): valid = False
             if r == 15 and (val < 0 or val > 9): valid = False
             
             if not valid:
-                QMessageBox.warning(self, "Invalid Score", f"The score '{val}' is impossible for {ROW_LABELS[r]}. Use 0 to scratch.")
+                QMessageBox.warning(self, "Invalid Score", f"Impossible score. Use 0 to scratch.")
                 item.setText("-")
             else:
                 is_new = item.data(Qt.ItemDataRole.UserRole) == "unclaimed"
                 item.setData(Qt.ItemDataRole.UserRole, "claimed")
-                item.setBackground(QColor(CLR_TABLE))
-                item.setForeground(QBrush(QColor(CLR_CLAIMED_TEXT)))
-                if is_new: self.advance_turn(c)
+                # Do not advance turn if it is the passive Bonus tracker
+                if is_new and r != 15: 
+                    self.advance_turn(c)
         except ValueError:
             item.setText("-")
         
@@ -321,14 +314,37 @@ class YahtzeeScorecard(QMainWindow):
             self.update_turn_ui()
 
     def update_turn_ui(self):
+        """UI Modification: Highlight available slots for active player."""
         self.turn_label.setText(f"Current Turn: {self.players[self.current_turn_index]}")
-        for i in range(len(self.players)):
-            name = f"▶ {self.players[i]}" if i == self.current_turn_index else self.players[i]
+        
+        for c in range(self.table.columnCount()):
+            is_active_col = (c == self.current_turn_index)
+            
+            # Header logic
+            name = f"▶ {self.players[c]}" if is_active_col else self.players[c]
             h_item = QTableWidgetItem(name)
-            # Highlight current player, dim others
-            color = CLR_ACTIVE_TURN if i == self.current_turn_index else "#555555"
+            color = CLR_ACTIVE_TURN if is_active_col else "#555555"
             h_item.setForeground(QBrush(QColor(color)))
-            self.table.setHorizontalHeaderItem(i, h_item)
+            self.table.setHorizontalHeaderItem(c, h_item)
+            
+            # Row Highlighting logic
+            for r in range(self.table.rowCount()):
+                if r in CALCULATED_ROWS: continue
+                
+                item = self.table.item(r, c)
+                status = item.data(Qt.ItemDataRole.UserRole)
+                widget = self.table.cellWidget(r, c)
+                
+                if status == "unclaimed":
+                    # Highlight unclaimed slots for current player only
+                    bg = CLR_ACTIVE_UNCLAIMED if is_active_col else CLR_UNCLAIMED
+                    item.setBackground(QColor(bg))
+                    if widget: widget.setStyleSheet(f"background-color: {bg}; color: white; border: none;")
+                else:
+                    # Claimed slots remain standard
+                    item.setBackground(QColor(CLR_TABLE))
+                    item.setForeground(QBrush(QColor(CLR_CLAIMED_TEXT)))
+                    if widget: widget.setStyleSheet(f"background-color: {CLR_TABLE}; color: {CLR_CLAIMED_TEXT}; font-weight: bold; border: none;")
 
     def recalc(self, c):
         u_sum = 0
@@ -356,8 +372,9 @@ class YahtzeeScorecard(QMainWindow):
         self.check_game_over()
 
     def check_game_over(self):
+        # Only end game when 13 primary rounds are complete for all
         for c in range(self.table.columnCount()):
-            for r in [0,1,2,3,4,5,9,10,11,12,13,14,15,16]:
+            for r in PRIMARY_CATEGORIES:
                 if self.table.item(r, c).text() == "-": return
                 
         scores = [(self.players[i], int(self.table.item(18, i).text())) for i in range(len(self.players))]

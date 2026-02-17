@@ -19,13 +19,14 @@ CLR_ACCENT = "#03DAC6"
 CLR_CLAIMED_TEXT = "#BB86FC"
 CLR_ACTIVE_TURN = "#FFD700"
 CLR_DISABLED = "#151515"
+CLR_VALID = "#2E7D32" 
+CLR_INVALID = "#C62828"
 
 DARK_STYLESHEET = f"""
     QMainWindow, QDialog, QWidget {{ background-color: {CLR_BACKGROUND}; color: #E0E0E0; }}
     QTableWidget {{ background-color: {CLR_TABLE}; color: #E0E0E0; gridline-color: #333333; border: 1px solid #333333; }}
     QHeaderView::section {{ background-color: #252525; color: #BB86FC; padding: 5px; border: 1px solid #333333; font-weight: bold; }}
-    QComboBox {{ background-color: {CLR_UNCLAIMED}; color: white; border: 1px solid #3D3D3D; border-radius: 3px; padding: 2px; }}
-    QLineEdit {{ background-color: #2D2D2D; color: white; border: 1px solid #3D3D3D; border-radius: 4px; padding: 5px; }}
+    QComboBox, QLineEdit {{ background-color: {CLR_UNCLAIMED}; color: white; border: 1px solid #3D3D3D; border-radius: 3px; padding: 2px; }}
     QPushButton {{ background-color: #333333; color: white; border-radius: 4px; padding: 10px; font-weight: bold; }}
     QPushButton:hover {{ background-color: #444444; }}
 """
@@ -49,21 +50,17 @@ class PlayerSetupDialog(QDialog):
         self.setFixedSize(400, 500)
         self.player_inputs = [] 
         layout = QVBoxLayout(self)
-        
         header = QLabel("Player Registration")
         header.setFont(QFont("Arial", 14, QFont.Weight.Bold))
         header.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(header)
-
         self.scroll_area = QScrollArea()
         self.scroll_widget = QWidget()
         self.input_layout = QVBoxLayout(self.scroll_widget)
         self.scroll_area.setWidget(self.scroll_widget)
         self.scroll_area.setWidgetResizable(True)
         layout.addWidget(self.scroll_area)
-        
         self.add_player_slot()
-        
         btn_layout = QHBoxLayout()
         add_btn = QPushButton("+ Add Player")
         add_btn.clicked.connect(self.add_player_slot)
@@ -72,7 +69,6 @@ class PlayerSetupDialog(QDialog):
         btn_layout.addWidget(add_btn)
         btn_layout.addWidget(rem_btn)
         layout.addLayout(btn_layout)
-        
         self.next_btn = QPushButton("Next: Determine Order")
         self.next_btn.setStyleSheet(f"background-color: {CLR_ACCENT}; color: black;")
         self.next_btn.clicked.connect(self.accept)
@@ -98,16 +94,11 @@ class RollOffDialog(QDialog):
         super().__init__()
         self.setWindowTitle("Roll-Off for Order")
         self.setFixedSize(450, 550)
-        self.names = names
-        self.player_scores = {name: [] for name in names}
-        self.to_roll = list(names)
-        self.sorted_names = []
-        self.animation_counter = 0
-        
+        self.names, self.player_scores = names, {name: [] for name in names}
+        self.to_roll, self.sorted_names, self.animation_counter = list(names), [], 0
         layout = QVBoxLayout(self)
         self.info_lbl = QLabel("Rolling 5 dice to determine play order...")
         layout.addWidget(self.info_lbl)
-
         self.table = QTableWidget(len(names), 2)
         self.table.setHorizontalHeaderLabels(["Player", "Roll Result"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
@@ -117,19 +108,15 @@ class RollOffDialog(QDialog):
             score_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table.setItem(i, 1, score_item)
         layout.addWidget(self.table)
-
         self.btn_roll = QPushButton("🎲 Roll for All Players")
         self.btn_roll.setStyleSheet(f"background-color: {CLR_ACCENT}; color: black;")
         self.btn_roll.clicked.connect(self.start_animation)
         layout.addWidget(self.btn_roll)
-
         self.btn_start = QPushButton("Start Scoring")
         self.btn_start.setEnabled(False)
         self.btn_start.clicked.connect(self.accept)
         layout.addWidget(self.btn_start)
-
-        self.timer = QTimer()
-        self.timer.timeout.connect(self.animate_roll)
+        self.timer = QTimer(); self.timer.timeout.connect(self.animate_roll)
 
     def start_animation(self):
         self.btn_roll.setEnabled(False)
@@ -140,22 +127,18 @@ class RollOffDialog(QDialog):
         self.animation_counter += 1
         for name in self.to_roll:
             idx = self.names.index(name)
-            temp_roll = sum(random.randint(1, 6) for _ in range(5))
-            self.table.item(idx, 1).setText(str(temp_roll))
+            self.table.item(idx, 1).setText(str(sum(random.randint(1, 6) for _ in range(5))))
         if self.animation_counter > 20:
             self.timer.stop()
             self.finalize_roll()
 
     def finalize_roll(self):
         for name in self.to_roll:
-            idx = self.names.index(name)
-            final_roll = sum(random.randint(1, 6) for _ in range(5))
-            self.player_scores[name].append(final_roll)
-            self.table.item(idx, 1).setText(str(final_roll))
-        
-        all_score_histories = list(self.player_scores.values())
-        self.to_roll = [n for n in self.names if all_score_histories.count(self.player_scores[n]) > 1]
-
+            idx, roll = self.names.index(name), sum(random.randint(1, 6) for _ in range(5))
+            self.player_scores[name].append(roll)
+            self.table.item(idx, 1).setText(str(roll))
+        hist = list(self.player_scores.values())
+        self.to_roll = [n for n in self.names if hist.count(self.player_scores[n]) > 1]
         if not self.to_roll:
             self.sorted_names = sorted(self.names, key=lambda n: self.player_scores[n], reverse=True)
             self.btn_start.setEnabled(True)
@@ -167,38 +150,27 @@ class RollOffDialog(QDialog):
 class YahtzeeScorecard(QMainWindow):
     def __init__(self, players):
         super().__init__()
-        self.players = players
-        self.current_turn_index = 0
-        self.play_again_requested = False
-        self._is_updating = False  # Re-entrancy guard
+        self.players, self.current_turn_index, self.play_again_requested, self._is_updating = players, 0, False, False
         self.setWindowTitle("Yahtzee! Pro Scorecard")
         self.resize(1100, 900)
-        
         container = QWidget()
         self.setCentralWidget(container)
         layout = QVBoxLayout(container)
-        
         self.turn_label = QLabel("")
         self.turn_label.setFont(QFont("Arial", 14, QFont.Weight.Bold))
         self.turn_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.turn_label.setStyleSheet(f"color: {CLR_ACTIVE_TURN}; padding: 10px;")
         layout.addWidget(self.turn_label)
-
         self.table = QTableWidget(len(ROW_LABELS), len(players))
         self.table.setVerticalHeaderLabels(ROW_LABELS)
         self.table.setHorizontalHeaderLabels(players)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.setup_board()
-        self.table.itemChanged.connect(self.handle_manual_entry)
         layout.addWidget(self.table)
-        
         btns = QHBoxLayout()
-        export = QPushButton("Export Results")
-        reset = QPushButton("Reset Game")
-        export.clicked.connect(self.export_txt)
-        reset.clicked.connect(self.reset)
-        btns.addWidget(export)
-        btns.addWidget(reset)
+        export, reset = QPushButton("Export Results"), QPushButton("Reset Game")
+        export.clicked.connect(self.export_txt); reset.clicked.connect(self.reset)
+        btns.addWidget(export); btns.addWidget(reset)
         layout.addLayout(btns)
         self.update_turn_ui()
 
@@ -210,14 +182,14 @@ class YahtzeeScorecard(QMainWindow):
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 item.setData(Qt.ItemDataRole.UserRole, "unclaimed")
                 if r in CALCULATED_ROWS:
-                    item.setText("0")
-                    item.setFlags(Qt.ItemFlag.ItemIsEnabled)
-                    item.setBackground(QColor(CLR_TOTAL_BG))
-                    item.setForeground(QBrush(QColor(CLR_ACCENT)))
+                    item.setText("0"); item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                    item.setBackground(QColor(CLR_TOTAL_BG)); item.setForeground(QBrush(QColor(CLR_ACCENT)))
                 elif r in UPPER_SECTION:
                     self.add_dropdown(r, c, ["-", "0", "1", "2", "3", "4", "5"])
                 elif r in FIXED_SCORE_ROWS:
                     self.add_dropdown(r, c, ["-", "✓", "0"])
+                elif r in MANUAL_INPUT_ROWS:
+                    self.add_manual_input(r, c)
                 else:
                     item.setBackground(QColor(CLR_UNCLAIMED))
                 self.table.setItem(r, c, item)
@@ -226,131 +198,127 @@ class YahtzeeScorecard(QMainWindow):
     def add_dropdown(self, r, c, options):
         combo = QComboBox()
         combo.addItems(options)
-        combo.setProperty("row", r)
-        combo.setProperty("col", c)
+        combo.setProperty("row", r); combo.setProperty("col", c)
         combo.currentIndexChanged.connect(self.handle_dropdown)
         self.table.setCellWidget(r, c, combo)
+
+    def add_manual_input(self, r, c):
+        edit = QLineEdit()
+        edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        edit.setProperty("row", r); edit.setProperty("col", c)
+        edit.editingFinished.connect(self.handle_manual_entry)
+        self.table.setCellWidget(r, c, edit)
+
+    def blink_cell(self, r, c, color):
+        """Safely blinks a cell, handling potential deletion of C++ objects."""
+        widget = self.table.cellWidget(r, c)
+        item = self.table.item(r, c)
+        if not item: return
+
+        # Capture state before turn might advance
+        is_claimed = item.data(Qt.ItemDataRole.UserRole) == "claimed"
+        target_bg = CLR_TABLE if is_claimed else (CLR_ACTIVE_UNCLAIMED if c == self.current_turn_index else CLR_UNCLAIMED)
+        text_clr = CLR_CLAIMED_TEXT if is_claimed else "white"
+
+        count = 0
+        def toggle():
+            nonlocal count
+            try:
+                # Security check: Does widget/item still belong to this cell?
+                if self.table.cellWidget(r, c) is not widget or self.table.item(r, c) is not item:
+                    return
+
+                current_color = color if count % 2 == 0 else target_bg
+                if widget:
+                    widget.setStyleSheet(f"background-color: {current_color}; color: {text_clr}; border: none;")
+                item.setBackground(QColor(current_color))
+                
+                count += 1
+                if count < 8:
+                    QTimer.singleShot(150, toggle)
+                else:
+                    self.update_turn_ui()
+            except RuntimeError:
+                pass # Widget was deleted (e.g. game reset)
+
+        toggle()
 
     def handle_dropdown(self, index):
         if self._is_updating: return
         combo = self.sender()
-        r, c = combo.property("row"), combo.property("col")
-        text = combo.currentText()
+        r, c, text = combo.property("row"), combo.property("col"), combo.currentText()
         if text == "-": return
 
-        # Confirm if editing out of turn
         if c != self.current_turn_index:
-            reply = QMessageBox.question(self, 'Confirm Entry', 
-                f"It is {self.players[self.current_turn_index]}'s turn.\nUpdate score for {self.players[c]} anyway?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-            if reply == QMessageBox.StandardButton.No:
-                self.table.blockSignals(True)
-                combo.setCurrentIndex(0)
-                self.table.blockSignals(False)
+            if QMessageBox.question(self, 'Confirm Entry', f"It is {self.players[self.current_turn_index]}'s turn. Edit {self.players[c]} anyway?") == QMessageBox.StandardButton.No:
+                self.table.blockSignals(True); combo.setCurrentIndex(0); self.table.blockSignals(False)
                 return
 
         self._is_updating = True
-        self.table.blockSignals(True)
-        
         item = self.table.item(r, c)
         is_new = item.data(Qt.ItemDataRole.UserRole) == "unclaimed"
         score = (int(text) * (r + 1)) if r in UPPER_SECTION else (FIXED_SCORE_ROWS[r] if text == "✓" else 0)
+        item.setText(str(score)); item.setData(Qt.ItemDataRole.UserRole, "claimed")
         
-        item.setText(str(score))
-        item.setData(Qt.ItemDataRole.UserRole, "claimed")
-
-        # Special logic for Yahtzee Bonus auto-fill
-        if r == 14: 
-            bonus_item = self.table.item(15, c)
+        if r == 14: # Yahtzee logic
+            bonus = self.table.item(15, c)
             if score == 0:
-                bonus_item.setText("0")
-                bonus_item.setData(Qt.ItemDataRole.UserRole, "claimed")
-                bonus_item.setFlags(Qt.ItemFlag.NoItemFlags)
-                bonus_item.setBackground(QColor(CLR_DISABLED)) 
+                bonus.setText("0"); bonus.setData(Qt.ItemDataRole.UserRole, "claimed")
+                self.table.cellWidget(15, c).setEnabled(False)
             else:
-                bonus_item.setFlags(Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsEditable)
-                bonus_item.setBackground(QColor(CLR_UNCLAIMED))
-        
-        self.recalc(c)
-        
-        # Advance turn only after successful logic and only if current player finished a new slot
+                self.table.cellWidget(15, c).setEnabled(True)
+
+        self.recalc(c); self.blink_cell(r, c, CLR_VALID)
         if is_new and c == self.current_turn_index:
             self.current_turn_index = (self.current_turn_index + 1) % len(self.players)
-            
-        self.table.blockSignals(False)
-        self.update_turn_ui()
         self._is_updating = False
 
-    def handle_manual_entry(self, item):
-        if self._is_updating or item.row() not in MANUAL_INPUT_ROWS or item.text() == "-": 
-            return
-        
-        r, c = item.row(), item.column()
+    def handle_manual_entry(self):
+        if self._is_updating: return
+        edit = self.sender()
+        r, c, text = edit.property("row"), edit.property("col"), edit.text()
+        if not text or text == "-": return
 
-        # 1. Turn Check
         if c != self.current_turn_index:
-            reply = QMessageBox.question(self, 'Confirm Entry', 
-                f"It is {self.players[self.current_turn_index]}'s turn.\nUpdate score for {self.players[c]} anyway?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-            if reply == QMessageBox.StandardButton.No:
-                self.table.blockSignals(True)
-                item.setText("-")
-                self.table.blockSignals(False)
-                return
+            if QMessageBox.question(self, 'Confirm Entry', f"It is {self.players[self.current_turn_index]}'s turn. Edit {self.players[c]} anyway?") == QMessageBox.StandardButton.No:
+                edit.setText(""); return
 
-        # 2. Validation
         self._is_updating = True
-        self.table.blockSignals(True)
-        
         try:
-            val = int(item.text())
-            valid = False
-            if r in [9, 10, 16]: # 3ofK, 4ofK, Chance
-                if val == 0 or (5 <= val <= 30): valid = True
-            elif r == 15: # Yahtzee Bonus
-                if 0 <= val <= 12: valid = True
-
+            val = int(text)
+            valid = (0 <= val <= 30) if r in [9, 10, 16] else (0 <= val <= 12 if r == 15 else False)
             if valid:
+                item = self.table.item(r, c)
                 is_new = item.data(Qt.ItemDataRole.UserRole) == "unclaimed"
-                item.setData(Qt.ItemDataRole.UserRole, "claimed")
-                self.recalc(c)
-                # Advance turn only for new valid entries by the active player
+                item.setText(str(val)); item.setData(Qt.ItemDataRole.UserRole, "claimed")
+                self.recalc(c); self.blink_cell(r, c, CLR_VALID)
                 if is_new and r != 15 and c == self.current_turn_index:
                     self.current_turn_index = (self.current_turn_index + 1) % len(self.players)
             else:
-                QMessageBox.warning(self, "Invalid Score", 
-                    f"'{val}' is mathematically impossible for {ROW_LABELS[r]}.\n"
-                    "Allowed values: 5-30 or 0 (to scratch).")
-                item.setText("-")
-                item.setData(Qt.ItemDataRole.UserRole, "unclaimed") # Reset to allow retry
+                self.blink_cell(r, c, CLR_INVALID)
+                QMessageBox.warning(self, "Invalid Score", f"'{val}' is impossible for this category.")
+                edit.setText("")
         except ValueError:
-            item.setText("-")
-            
-        self.table.blockSignals(False)
-        self.update_turn_ui()
+            edit.setText("")
         self._is_updating = False
 
     def update_turn_ui(self):
         self.turn_label.setText(f"Active Turn: {self.players[self.current_turn_index]}")
         for c in range(self.table.columnCount()):
-            is_active_col = (c == self.current_turn_index)
-            name = f"▶ {self.players[c]}" if is_active_col else self.players[c]
-            h_item = QTableWidgetItem(name)
-            h_item.setForeground(QBrush(QColor(CLR_ACTIVE_TURN if is_active_col else "#555555")))
+            is_active = (c == self.current_turn_index)
+            h_item = QTableWidgetItem(f"▶ {self.players[c]}" if is_active else self.players[c])
+            h_item.setForeground(QBrush(QColor(CLR_ACTIVE_TURN if is_active else "#555555")))
             self.table.setHorizontalHeaderItem(c, h_item)
             for r in range(self.table.rowCount()):
                 if r in CALCULATED_ROWS: continue
-                item = self.table.item(r, c)
+                item, widget = self.table.item(r, c), self.table.cellWidget(r, c)
                 status = item.data(Qt.ItemDataRole.UserRole)
-                widget = self.table.cellWidget(r, c)
-                if status == "unclaimed":
-                    bg = CLR_ACTIVE_UNCLAIMED if is_active_col else CLR_UNCLAIMED
-                    item.setBackground(QColor(bg))
-                    if widget: widget.setStyleSheet(f"background-color: {bg}; color: white; border: none;")
-                else:
-                    item.setBackground(QColor(CLR_TABLE))
-                    item.setForeground(QBrush(QColor(CLR_CLAIMED_TEXT)))
-                    if widget: widget.setStyleSheet(f"background-color: {CLR_TABLE}; color: {CLR_CLAIMED_TEXT}; font-weight: bold; border: none;")
+                bg = CLR_TABLE if status == "claimed" else (CLR_ACTIVE_UNCLAIMED if is_active else CLR_UNCLAIMED)
+                item.setBackground(QColor(bg))
+                if widget:
+                    txt_clr = CLR_CLAIMED_TEXT if status == "claimed" else "white"
+                    fw = "bold" if status == "claimed" else "normal"
+                    widget.setStyleSheet(f"background-color: {bg}; color: {txt_clr}; font-weight: {fw}; border: none;")
 
     def recalc(self, c):
         u_sum = sum(int(self.table.item(r, c).text()) for r in range(6) if self.table.item(r, c).text().isdigit())
@@ -368,41 +336,33 @@ class YahtzeeScorecard(QMainWindow):
         for c in range(self.table.columnCount()):
             for r in PRIMARY_CATEGORIES:
                 if self.table.item(r, c).text() == "-": return
-        
-        scores = [(self.players[i], int(self.table.item(18, i).text())) for i in range(len(self.players))]
-        scores.sort(key=lambda x: x[1], reverse=True)
-        winner_text = f"🏆 Winner: {scores[0][0]} ({scores[0][1]} pts)"
-        
+        scores = sorted([(self.players[i], int(self.table.item(18, i).text())) for i in range(len(self.players))], key=lambda x: x[1], reverse=True)
         msg = QMessageBox(self)
-        msg.setWindowTitle("Game Over")
-        msg.setText(winner_text)
+        msg.setWindowTitle("Game Over"); msg.setText(f"🏆 Winner: {scores[0][0]} ({scores[0][1]} pts)")
         btn_play = msg.addButton("Play Again", QMessageBox.ButtonRole.AcceptRole)
-        btn_exit = msg.addButton("Exit", QMessageBox.ButtonRole.RejectRole)
-        msg.exec()
-        
+        msg.addButton("Exit", QMessageBox.ButtonRole.RejectRole); msg.exec()
         if msg.clickedButton() == btn_play:
             self.play_again_requested = True
-            self.close()
-        else:
-            self.close()
+        self.close()
 
     def export_txt(self):
         path, _ = QFileDialog.getSaveFileName(self, "Save Scorecard", "", "Text Files (*.txt)")
         if path:
             with open(path, 'w') as f:
                 for r in range(len(ROW_LABELS)):
-                    row_data = [self.table.item(r, c).text() for c in range(len(self.players))]
-                    f.write(f"{ROW_LABELS[r]:<20} | {' | '.join(row_data)}\n")
+                    f.write(f"{ROW_LABELS[r]:<20} | {' | '.join([self.table.item(r, c).text() for c in range(len(self.players))])}\n")
 
     def reset(self):
         if QMessageBox.question(self, "Reset", "Clear scores?") == QMessageBox.StandardButton.Yes:
-            self.current_turn_index = 0
-            self.setup_board()
-            self.update_turn_ui()
+            self.current_turn_index = 0; self.setup_board(); self.update_turn_ui()
+
+    def closeEvent(self, event):
+        if hasattr(self, 'loop'):
+            self.loop.quit()
+        event.accept()
 
 if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    app.setStyleSheet(DARK_STYLESHEET)
+    app = QApplication(sys.argv); app.setStyleSheet(DARK_STYLESHEET)
     setup = PlayerSetupDialog()
     if setup.exec():
         names = [i.text().strip() or f"P{idx+1}" for idx, (_, i) in enumerate(setup.player_inputs)]
@@ -410,10 +370,11 @@ if __name__ == "__main__":
             rolloff = RollOffDialog(names)
             if rolloff.exec() == QDialog.DialogCode.Accepted:
                 w = YahtzeeScorecard(rolloff.sorted_names)
-                w.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+                w.loop = QEventLoop()  # Attach loop to window
                 w.show()
-                loop = QEventLoop()
-                w.destroyed.connect(loop.quit)
-                loop.exec()
-                if not getattr(w, 'play_again_requested', False): break
-            else: break
+                w.loop.exec()          # Wait for closeEvent to call loop.quit()
+                
+                if not getattr(w, 'play_again_requested', False): 
+                    break
+            else: 
+                break

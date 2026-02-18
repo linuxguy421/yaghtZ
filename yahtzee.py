@@ -33,7 +33,7 @@ DARK_STYLESHEET = f"""
 
 UPPER_SECTION = [0, 1, 2, 3, 4, 5]
 FIXED_SCORE_ROWS = {11: 25, 12: 30, 13: 40, 14: 50}
-MANUAL_INPUT_ROWS = [9, 10, 15, 16] 
+MANUAL_INPUT_ROWS = [9, 10, 16] 
 CALCULATED_ROWS = [6, 7, 8, 17, 18]
 PRIMARY_CATEGORIES = [0, 1, 2, 3, 4, 5, 9, 10, 11, 12, 13, 14, 16]
 
@@ -173,6 +173,92 @@ class YahtzeeScorecard(QMainWindow):
         btns.addWidget(export); btns.addWidget(reset)
         layout.addLayout(btns)
         self.update_turn_ui()
+    
+    def advance_to_next_player(self):
+        start_index = self.current_turn_index
+        total_players = len(self.players)
+
+        for _ in range(total_players):
+            self.current_turn_index = (self.current_turn_index + 1) % total_players
+
+            if self.player_has_turns_left(self.current_turn_index):
+                self.update_turn_ui()
+                return
+            else:
+                self.blink_column(self.current_turn_index, CLR_INVALID)
+
+        # If we exit the loop, no players have turns left
+        self.check_game_over()
+
+    def player_has_turns_left(self, c):
+        """
+        A player has turns left if they have any non-bonus
+        primary category unclaimed.
+
+        Yahtzee Bonus does NOT count as a playable turn
+        for skip logic purposes.
+        """
+
+        # Check all primary categories except Yahtzee Bonus
+        for r in PRIMARY_CATEGORIES:
+            if r == 15:
+                continue
+
+            if self.table.item(r, c).data(Qt.ItemDataRole.UserRole) == "unclaimed":
+                return True
+
+        # If we reach here, no normal categories remain.
+        # Even if bonus is available, player is considered done.
+        return False
+    
+    def blink_column(self, c, color):
+        count = 0
+
+        def toggle():
+            nonlocal count
+            for r in range(self.table.rowCount()):
+                item = self.table.item(r, c)
+                if item:
+                    current = color if count % 2 == 0 else CLR_TABLE
+                    item.setBackground(QColor(current))
+
+            count += 1
+            if count < 6:
+                QTimer.singleShot(150, toggle)
+            else:
+                self.update_turn_ui()
+
+        toggle()
+    
+    def update_yahtzee_bonus_state(self, c):
+        yahtzee_item = self.table.item(14, c)
+        bonus_widget = self.table.cellWidget(15, c)
+        bonus_item = self.table.item(15, c)
+
+        if not bonus_widget:
+            return
+
+        # Condition 1: Yahtzee must be claimed and > 0
+        yahtzee_claimed = (
+            yahtzee_item.data(Qt.ItemDataRole.UserRole) == "claimed"
+            and yahtzee_item.text().isdigit()
+            and int(yahtzee_item.text()) > 0
+        )
+
+        # Condition 2: Bonus cannot be the only unclaimed primary category
+        unclaimed_primary = [
+            r for r in PRIMARY_CATEGORIES
+            if self.table.item(r, c).data(Qt.ItemDataRole.UserRole) == "unclaimed"
+        ]
+
+        bonus_is_only_remaining = (unclaimed_primary == [15])
+
+        enable_bonus = yahtzee_claimed and not bonus_is_only_remaining
+
+        bonus_widget.setEnabled(enable_bonus)
+
+        if not enable_bonus and bonus_item.data(Qt.ItemDataRole.UserRole) == "unclaimed":
+            bonus_widget.setStyleSheet("background-color: #151515; color: #555555;")
 
     def setup_board(self):
         self.table.blockSignals(True)
@@ -185,7 +271,9 @@ class YahtzeeScorecard(QMainWindow):
                     item.setText("0"); item.setFlags(Qt.ItemFlag.ItemIsEnabled)
                     item.setBackground(QColor(CLR_TOTAL_BG)); item.setForeground(QBrush(QColor(CLR_ACCENT)))
                 elif r in UPPER_SECTION:
-                    self.add_dropdown(r, c, ["-", "0", "1", "2", "3", "4", "5"])
+                    self.add_dropdown(r, c, ["-", "1", "2", "3", "4", "5"])
+                elif r == 15:
+                    self.add_dropdown(r, c, ["-", "1", "2", "3", "4", "5"])
                 elif r in FIXED_SCORE_ROWS:
                     self.add_dropdown(r, c, ["-", "✓", "0"])
                 elif r in MANUAL_INPUT_ROWS:
@@ -194,6 +282,9 @@ class YahtzeeScorecard(QMainWindow):
                     item.setBackground(QColor(CLR_UNCLAIMED))
                 self.table.setItem(r, c, item)
         self.table.blockSignals(False)
+        for c in range(self.table.columnCount()):
+            self.update_yahtzee_bonus_state(c)
+
 
     def add_dropdown(self, r, c, options):
         combo = QComboBox()
@@ -244,34 +335,71 @@ class YahtzeeScorecard(QMainWindow):
         toggle()
 
     def handle_dropdown(self, index):
-        if self._is_updating: return
+        if self._is_updating:
+            return
+
         combo = self.sender()
-        r, c, text = combo.property("row"), combo.property("col"), combo.currentText()
-        if text == "-": return
+        r = combo.property("row")
+        c = combo.property("col")
+        text = combo.currentText()
+
+        if text == "-":
+            return
 
         if c != self.current_turn_index:
-            if QMessageBox.question(self, 'Confirm Entry', f"It is {self.players[self.current_turn_index]}'s turn. Edit {self.players[c]} anyway?") == QMessageBox.StandardButton.No:
-                self.table.blockSignals(True); combo.setCurrentIndex(0); self.table.blockSignals(False)
+            if QMessageBox.question(
+                self,
+                "Confirm Entry",
+                f"It is {self.players[self.current_turn_index]}'s turn. Edit {self.players[c]} anyway?"
+            ) == QMessageBox.StandardButton.No:
+                self.table.blockSignals(True)
+                combo.setCurrentIndex(0)
+                self.table.blockSignals(False)
                 return
 
         self._is_updating = True
         item = self.table.item(r, c)
-        is_new = item.data(Qt.ItemDataRole.UserRole) == "unclaimed"
-        score = (int(text) * (r + 1)) if r in UPPER_SECTION else (FIXED_SCORE_ROWS[r] if text == "✓" else 0)
-        item.setText(str(score)); item.setData(Qt.ItemDataRole.UserRole, "claimed")
-        
-        if r == 14: # Yahtzee logic
-            bonus = self.table.item(15, c)
-            if score == 0:
-                bonus.setText("0"); bonus.setData(Qt.ItemDataRole.UserRole, "claimed")
-                self.table.cellWidget(15, c).setEnabled(False)
-            else:
-                self.table.cellWidget(15, c).setEnabled(True)
 
-        self.recalc(c); self.blink_cell(r, c, CLR_VALID)
-        if is_new and c == self.current_turn_index:
-            self.current_turn_index = (self.current_turn_index + 1) % len(self.players)
+        previous_text = item.text()
+        previous_score = int(previous_text) if previous_text.isdigit() else 0
+        was_unclaimed = item.data(Qt.ItemDataRole.UserRole) == "unclaimed"
+
+        # ----- Score Calculation -----
+        if r in UPPER_SECTION:
+            score = int(text) * (r + 1)
+        elif r in FIXED_SCORE_ROWS:
+            score = FIXED_SCORE_ROWS[r] if text == "✓" else 0
+        elif r == 15:
+            score = int(text) * 100
+        else:
+            score = 0
+
+        item.setText(str(score))
+        item.setData(Qt.ItemDataRole.UserRole, "claimed")
+
+        # ----- Turn Advancement Logic -----
+        advance_turn = False
+
+        if r == 15:
+            # Advance only if bonus count increased
+            new_count = int(text)
+            previous_count = previous_score // 100 if previous_score else 0
+            if new_count > previous_count and c == self.current_turn_index:
+                advance_turn = True
+        else:
+            if was_unclaimed and c == self.current_turn_index:
+                advance_turn = True
+
+        self.recalc(c)
+        self.blink_cell(r, c, CLR_VALID)
+
+        if advance_turn:
+            self.current_turn_index = (
+                self.current_turn_index + 1
+            ) % len(self.players)
+
         self._is_updating = False
+        self.update_yahtzee_bonus_state(c)
 
     def handle_manual_entry(self):
         if self._is_updating: return
@@ -293,7 +421,7 @@ class YahtzeeScorecard(QMainWindow):
                 item.setText(str(val)); item.setData(Qt.ItemDataRole.UserRole, "claimed")
                 self.recalc(c); self.blink_cell(r, c, CLR_VALID)
                 if is_new and r != 15 and c == self.current_turn_index:
-                    self.current_turn_index = (self.current_turn_index + 1) % len(self.players)
+                    self.advance_to_next_player()
             else:
                 self.blink_cell(r, c, CLR_INVALID)
                 QMessageBox.warning(self, "Invalid Score", f"'{val}' is impossible for this category.")
@@ -301,6 +429,7 @@ class YahtzeeScorecard(QMainWindow):
         except ValueError:
             edit.setText("")
         self._is_updating = False
+        self.update_yahtzee_bonus_state(c)
 
     def update_turn_ui(self):
         self.turn_label.setText(f"Active Turn: {self.players[self.current_turn_index]}")
@@ -327,7 +456,7 @@ class YahtzeeScorecard(QMainWindow):
         self.table.item(7, c).setText(str(bonus))
         self.table.item(8, c).setText(str(u_sum + bonus))
         l_sum = sum(int(self.table.item(r, c).text()) for r in [9, 10, 11, 12, 13, 14, 16] if self.table.item(r, c).text().isdigit())
-        y_bonus = (int(self.table.item(15, c).text()) * 100) if self.table.item(15, c).text().isdigit() else 0
+        y_bonus = int(self.table.item(15, c).text()) if self.table.item(15, c).text().isdigit() else 0
         self.table.item(17, c).setText(str(l_sum + y_bonus))
         self.table.item(18, c).setText(str(u_sum + bonus + l_sum + y_bonus))
         self.check_game_over()

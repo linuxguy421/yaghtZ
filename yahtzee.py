@@ -2,6 +2,9 @@
 
 import sys
 import random
+import json
+import os
+from datetime import datetime
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QLineEdit, QPushButton, 
                              QTableWidget, QTableWidgetItem, QMessageBox, QDialog,
@@ -198,12 +201,20 @@ class YahtzeeScorecard(QMainWindow):
         layout.addWidget(self.table)
         
         btns = QHBoxLayout()
-        export, reset, rules = QPushButton("Export"), QPushButton("Reset"), QPushButton("Rules")
-        export.clicked.connect(self.export_txt); reset.clicked.connect(self.reset); rules.clicked.connect(self.show_rules)
-        btns.addWidget(export); btns.addWidget(reset); btns.addWidget(rules)
+        high_score_btn, reset, rules = QPushButton("High Scores"), QPushButton("Reset"), QPushButton("Rules")
+        high_score_btn.clicked.connect(self.show_high_scores) 
+        reset.clicked.connect(self.reset) 
+        rules.clicked.connect(self.show_rules)
+        btns.addWidget(high_score_btn); btns.addWidget(reset); btns.addWidget(rules)
         layout.addLayout(btns)
         
         self.update_turn_ui()
+
+    def closeEvent(self, event):
+        # If the local event loop is running, tell it to exit
+        if hasattr(self, 'loop') and self.loop.isRunning():
+            self.loop.quit()
+        event.accept()
 
     def show_rules(self):
         RulesDialog().exec()
@@ -350,32 +361,108 @@ class YahtzeeScorecard(QMainWindow):
     def check_game_over(self):
         for c in range(self.table.columnCount()):
             if self.player_has_turns_left(c): return
+            
+        # Calculate final scores
         scores = sorted([(self.players[i], int(self.table.item(18, i).text())) for i in range(len(self.players))], key=lambda x: x[1], reverse=True)
-        res = QMessageBox.question(self, "Game Over", f"Winner: {scores[0][0]} ({scores[0][1]} pts)\nPlay Again?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        if res == QMessageBox.StandardButton.Yes: self.play_again_requested = True
+        
+        # Save the winner's stats automatically
+        winner_name, winner_score = scores[0][0], scores[0][1]
+        self.save_high_score(winner_name, winner_score)
+        
+        res = QMessageBox.question(self, "Game Over", f"Winner: {winner_name} ({winner_score} pts)\nPlay Again?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if res == QMessageBox.StandardButton.Yes: 
+            self.play_again_requested = True
+            
+        # Close the window cleanly
         self.close()
 
-    def export_txt(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Save", "", "Text Files (*.txt)")
-        if path:
-            with open(path, 'w') as f:
-                for r in range(len(ROW_LABELS)):
-                    f.write(f"{ROW_LABELS[r]:<20} | {' | '.join([self.table.item(r, c).text() for c in range(len(self.players))])}\n")
+    def save_high_score(self, name, score):
+        filename = "yahtzee_highscores.json"
+        scores_data = []
+        
+        # Load existing scores if the file exists
+        if os.path.exists(filename):
+            try:
+                with open(filename, "r") as f:
+                    scores_data = json.load(f)
+            except json.JSONDecodeError:
+                pass
+        
+        # Append the new winner
+        scores_data.append({
+            "name": name,
+            "score": score,
+            "date": datetime.now().strftime("%Y-%m-%d")
+        })
+        
+        # Sort descending by score and keep only the top 10
+        scores_data = sorted(scores_data, key=lambda x: x["score"], reverse=True)[:10]
+        
+        # Save back to file
+        with open(filename, "w") as f:
+            json.dump(scores_data, f, indent=4)
+
+    def show_high_scores(self):
+        filename = "yahtzee_highscores.json"
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Top 10 High Scores")
+        dialog.resize(350, 400)
+        dialog.setStyleSheet(DARK_STYLESHEET)
+        layout = QVBoxLayout(dialog)
+        
+        if not os.path.exists(filename):
+            msg = QLabel("No high scores recorded yet. Go finish a game!")
+            msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            layout.addWidget(msg)
+        else:
+            try:
+                with open(filename, "r") as f:
+                    scores_data = json.load(f)
+                
+                table = QTableWidget(len(scores_data), 3)
+                table.setHorizontalHeaderLabels(["Rank", "Player", "Score"])
+                table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+                table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers) # Make read-only
+                
+                for r, row_data in enumerate(scores_data):
+                    table.setItem(r, 0, QTableWidgetItem(f"#{r+1}"))
+                    table.setItem(r, 1, QTableWidgetItem(row_data["name"]))
+                    table.setItem(r, 2, QTableWidgetItem(str(row_data["score"])))
+                    
+                layout.addWidget(table)
+            except Exception as e:
+                layout.addWidget(QLabel(f"Error loading scores: {e}"))
+                
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dialog.close)
+        layout.addWidget(close_btn)
+        dialog.exec()
 
     def reset(self):
         if QMessageBox.question(self, "Reset", "Clear?") == QMessageBox.StandardButton.Yes:
             self.current_turn_index = 0; self.setup_board(); self.update_turn_ui()
 
 if __name__ == "__main__":
-    app = QApplication(sys.argv); app.setStyleSheet(DARK_STYLESHEET)
+    app = QApplication(sys.argv)
+    app.setStyleSheet(DARK_STYLESHEET)
+    
     while True:
         setup = PlayerSetupDialog()
-        if setup.exec():
-            names = [i.text().strip() or f"P{idx+1}" for idx, (_, i) in enumerate(setup.player_inputs)]
-            rolloff = RollOffDialog(names)
-            if rolloff.exec():
-                w = YahtzeeScorecard(rolloff.sorted_names)
-                w.loop = QEventLoop(); w.show(); w.loop.exec()
-                if not getattr(w, 'play_again_requested', False): break
-            else: break
-        else: break
+        if not setup.exec(): # User closed the dialog manually
+            break
+            
+        names = [i.text().strip() or f"P{idx+1}" for idx, (_, i) in enumerate(setup.player_inputs)]
+        rolloff = RollOffDialog(names)
+        
+        if not rolloff.exec(): # User closed the dialog manually
+            break
+            
+        w = YahtzeeScorecard(rolloff.sorted_names)
+        w.loop = QEventLoop()
+        w.show()
+        w.loop.exec()
+        
+        if not getattr(w, 'play_again_requested', False): 
+            break
+            
+    sys.exit(0)

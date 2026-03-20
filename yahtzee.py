@@ -50,19 +50,69 @@ class RulesDialog(QDialog):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Official Yahtzee Rules")
-        self.resize(600, 700)
+        self.resize(660, 750)
         layout = QVBoxLayout(self)
         rules_text = QTextEdit()
         rules_text.setReadOnly(True)
         rules_text.setHtml("""
-            <h2 style='color: #03DAC6;'>Yahtzee Rules</h2>
-            <h3 style='color: #BB86FC;'>Joker Rule Logic</h3>
-            <p>When you roll a Yahtzee and your Yahtzee box is already filled with a 50:</p>
+            <h2 style='color: #03DAC6;'>Official Yahtzee Rules</h2>
+
+            <h3 style='color: #BB86FC;'>Object of the Game</h3>
+            <p>Obtain the highest score for one or more games. The player with the highest total score for all games (up to 6 games) wins.</p>
+
+            <h3 style='color: #BB86FC;'>How to Play</h3>
+            <p>Each player rolls all five dice to determine who goes first — highest total starts. Play continues clockwise.</p>
+            <p>Each turn consists of a maximum of <b>three rolls</b>. The first roll must use all five dice. On the second and third rolls, the player may set aside any dice and re-roll the rest. After the final roll, the player <b>must</b> enter a score (or a zero) in one open box.</p>
+
+            <h3 style='color: #BB86FC;'>Upper Section</h3>
+            <p>Score <b>only</b> the dice matching that category's number. For example, rolling three 3s scores 9 in the Threes box.</p>
+            <ul>
+                <li><b>Ones</b> — sum of all 1s</li>
+                <li><b>Twos</b> — sum of all 2s</li>
+                <li><b>Threes</b> — sum of all 3s</li>
+                <li><b>Fours</b> — sum of all 4s</li>
+                <li><b>Fives</b> — sum of all 5s</li>
+                <li><b>Sixes</b> — sum of all 6s</li>
+            </ul>
+            <p><b>Bonus:</b> Score 63 or more in the Upper Section to earn a <b>+35 bonus</b>. (Tip: scoring three of each number adds up to exactly 63.)</p>
+
+            <h3 style='color: #BB86FC;'>Lower Section</h3>
+            <ul>
+                <li><b>3 of a Kind</b> — at least three dice the same; score = total of <i>all</i> dice</li>
+                <li><b>4 of a Kind</b> — at least four dice the same; score = total of <i>all</i> dice</li>
+                <li><b>Full House</b> — three of one number and two of another; scores <b>25 points</b></li>
+                <li><b>Small Straight</b> — any four sequential numbers (e.g. 1-2-3-4); scores <b>30 points</b></li>
+                <li><b>Large Straight</b> — five sequential numbers (1-2-3-4-5 or 2-3-4-5-6); scores <b>40 points</b></li>
+                <li><b>Yahtzee</b> — five of a kind; scores <b>50 points</b></li>
+                <li><b>Chance</b> — any combination; score = total of <i>all</i> dice</li>
+            </ul>
+
+            <h3 style='color: #BB86FC;'>Yahtzee Bonus</h3>
+            <p>If you roll a second (or further) Yahtzee in the same game <b>and</b> your Yahtzee box already holds a 50, you earn a <b>Yahtzee Bonus Chip worth 100 points</b>. Click the <b>+</b> button to record each bonus Yahtzee.</p>
+            <p>The second Yahtzee must first be scored in the matching Upper Section box. If that box is already filled, the Joker rules below apply.</p>
+
+            <hr style='border-color: #444;'/>
+            <h3 style='color: #BB86FC;'>&#127183; Joker Rules</h3>
+            <p>A Yahtzee acts as a <b>Joker</b> only when <i>both</i> conditions are met:</p>
             <ol>
-                <li><b>Score the Bonus:</b> Click the '+' for 100 points.</li>
-                <li><b>Mandatory Upper:</b> If the matching number in the Upper Section is open, you MUST score there.</li>
-                <li><b>Joker Choice:</b> If that Upper box is full, you may score in any empty Lower box for full points (e.g. 40 for Large Straight).</li>
-                <li><b>Last Resort:</b> If all Lower boxes are full, you must score a zero in an open Upper box.</li>
+                <li>The Yahtzee box has already been filled (with 50 <i>or</i> 0).</li>
+                <li>The matching Upper Section box is already filled.</li>
+            </ol>
+            <p>When both conditions are met, score in the Lower Section as follows:</p>
+            <ul>
+                <li><b>3 of a Kind, 4 of a Kind, or Chance</b> — score the total of all 5 dice</li>
+                <li><b>Full House</b> — score 25 points</li>
+                <li><b>Small Straight</b> — score 30 points</li>
+                <li><b>Large Straight</b> — score 40 points</li>
+            </ul>
+            <p>If all Lower Section boxes are also filled, you must enter a <b>zero</b> in any open Upper Section box. You still receive the Bonus Chip.</p>
+
+            <h3 style='color: #BB86FC;'>In This App — Joker Turn Order</h3>
+            <ol>
+                <li><b>Score the Bonus:</b> Click <b>+</b> for 100 points (if first Yahtzee scored 50).</li>
+                <li><b>Mandatory Upper:</b> If the matching Upper box is open, you <b>must</b> score there.</li>
+                <li><b>Joker Choice:</b> If that Upper box is full, score in any open Lower box for full fixed points.</li>
+                <li><b>Last Resort:</b> If all Lower boxes are full, enter a zero in any open Upper box.</li>
             </ol>
         """)
         layout.addWidget(rules_text)
@@ -310,7 +360,7 @@ class YahtzeeScorecard(QMainWindow):
         curr = self.current_turn_index
         # Sticky Message Logic
         if self.joker_active:
-            self.turn_label.setText("JOKER ACTIVE: Select matching Upper box. If full, select any Lower box.")
+            self.turn_label.setText("Joker Rules apply!")
             self.turn_label.setStyleSheet(f"color: {CLR_ACCENT}; border: 2px solid {CLR_ACCENT}; padding: 5px;")
         else:
             self.turn_label.setText(f"Active Turn: {self.players[curr]}")

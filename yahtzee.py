@@ -8,9 +8,11 @@ from datetime import datetime
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QLineEdit, QPushButton, 
                              QTableWidget, QTableWidgetItem, QMessageBox, QDialog,
-                             QScrollArea, QHeaderView, QFileDialog, QComboBox, QTextEdit)
-from PyQt6.QtCore import Qt, QTimer, QEventLoop
+                             QScrollArea, QHeaderView, QFileDialog, QComboBox, QTextEdit,
+                             QStatusBar)
+from PyQt6.QtCore import Qt, QTimer, QEventLoop, QByteArray
 from PyQt6.QtGui import QColor, QFont, QBrush
+from PyQt6.QtSvgWidgets import QSvgWidget
 
 # --- Theme Configuration ---
 CLR_BACKGROUND = "#121212"
@@ -24,6 +26,16 @@ CLR_ACTIVE_TURN = "#FFD700"
 CLR_DISABLED = "#151515"
 CLR_VALID = "#2E7D32" 
 CLR_INVALID = "#C62828"
+CLR_ACCENT_HOVER = "#00B3A4"
+CLR_PURPLE_HOVER = "#9B59D0"
+
+def accent_btn_style():
+    return (f"QPushButton {{ background-color: {CLR_ACCENT}; color: black; border-radius: 4px; padding: 10px; font-weight: bold; }}"
+            f"QPushButton:hover {{ background-color: {CLR_ACCENT_HOVER}; }}")
+
+def purple_btn_style():
+    return (f"QPushButton {{ background-color: {CLR_CLAIMED_TEXT}; color: black; border-radius: 4px; padding: 10px; font-weight: bold; }}"
+            f"QPushButton:hover {{ background-color: {CLR_PURPLE_HOVER}; }}")
 
 DARK_STYLESHEET = f"""
     QMainWindow, QDialog, QWidget {{ background-color: {CLR_BACKGROUND}; color: #E0E0E0; }}
@@ -55,66 +67,85 @@ class RulesDialog(QDialog):
         rules_text = QTextEdit()
         rules_text.setReadOnly(True)
         rules_text.setHtml("""
-            <h2 style='color: #03DAC6;'>Official Yahtzee Rules</h2>
+            <h2 style='color: #03DAC6;'>Yahtzee Pro — How to Use This App</h2>
 
             <h3 style='color: #BB86FC;'>Object of the Game</h3>
-            <p>Obtain the highest score for one or more games. The player with the highest total score for all games (up to 6 games) wins.</p>
+            <p>Score the highest total across all 13 categories. The player with the highest Grand Total wins.</p>
 
-            <h3 style='color: #BB86FC;'>Order of Play</h3>
-            <p>This program automatically determines order of play by a randomizer, order of play is determined by highest to lowest. Any tie rolls between any number of players will trigger a re-roll for all players that have tied.</p>
+            <h3 style='color: #BB86FC;'>Setting Up — Registration</h3>
+            <p>Enter each player's name on the Registration screen. Up to 8 players are supported.</p>
+            <p>This app is a <b>scorecard only</b> — you roll your physical dice yourself. The app tracks scores, enforces turn order, and calculates totals automatically.</p>
+            <p><b>Tip:</b> If you prefer to determine turn order manually (e.g. by house rule or physical roll), enter players in the desired turn order and click <b>Start Scoring</b> on the Roll-Off screen without rolling.</p>
 
-            <h3 style='color: #BB86FC;'>How to Play</h3>
-            <p>Each turn consists of a maximum of <b>three rolls</b>. The first roll must use all five dice. On the second and third rolls, the player may set aside any dice and re-roll the rest. After the final roll, the player <b>must</b> enter a score (or a zero) in one open box.</p>
+            <h3 style='color: #BB86FC;'>Determining Turn Order — Roll-Off Screen</h3>
+            <p>The Roll-Off screen offers two options:</p>
+            <ul>
+                <li><b>🎲 Roll for All Players</b> — the app rolls 5 virtual dice for each player and animates the reveal one player at a time. Highest total goes first. Ties trigger an automatic re-roll between tied players only.</li>
+                <li><b>Start Scoring</b> — skip the roll entirely and use the registration order as the turn order.</li>
+            </ul>
+
+            <h3 style='color: #BB86FC;'>Playing a Turn</h3>
+            <p>Roll your physical dice (up to three rolls per turn, re-rolling any dice you choose). Then select your score from the dropdown in your column for the category you want to claim.</p>
+            <ul>
+                <li>Selecting any value other than <b>—</b> on an <b>unclaimed</b> box claims it and advances to the next player.</li>
+                <li>You must claim exactly one unclaimed box per turn. You may enter <b>0</b> in any open box if your roll doesn't fit anywhere useful.</li>
+            </ul>
+
+            <h3 style='color: #BB86FC;'>Correcting a Score</h3>
+            <p>Before scoring your turn, you may correct any previously claimed box:</p>
+            <ol>
+                <li>Reset the box back to <b>—</b> — an amber warning will appear reminding you a correction is in progress.</li>
+                <li>Fill that box (or any other claimed box) with the correct value — a green confirmation will appear.</li>
+                <li>Now score your actual turn by claiming any <b>unclaimed</b> box — the turn then ends normally.</li>
+            </ol>
+            <p>Corrections are free edits and do not consume your turn. The turn only ends when you score an unclaimed box.</p>
 
             <h3 style='color: #BB86FC;'>Upper Section</h3>
-            <p>Score <b>only</b> the dice matching that category's number. For example, rolling three 3s scores 9 in the Threes box.</p>
+            <p>Score only the dice matching that category's face value. The dropdown shows how many of that die you rolled (0–5); the app multiplies by the face value automatically.</p>
             <ul>
-                <li><b>Ones</b> — sum of all 1s</li>
-                <li><b>Twos</b> — sum of all 2s</li>
-                <li><b>Threes</b> — sum of all 3s</li>
-                <li><b>Fours</b> — sum of all 4s</li>
-                <li><b>Fives</b> — sum of all 5s</li>
-                <li><b>Sixes</b> — sum of all 6s</li>
+                <li><b>Ones</b> through <b>Sixes</b> — select the count of matching dice (e.g. three 4s → select 3, scores 12)</li>
             </ul>
-            <p><b>Bonus:</b> Score 63 or more in the Upper Section to earn a <b>+35 bonus</b>. (Tip: scoring three of each number adds up to exactly 63.)</p>
+            <p><b>Bonus:</b> If your Upper Section subtotal reaches <b>63 or more</b>, you automatically receive a <b>+35 point bonus</b>. The running subtotal and bonus are calculated live.</p>
 
             <h3 style='color: #BB86FC;'>Lower Section</h3>
             <ul>
-                <li><b>3 of a Kind</b> — at least three dice the same; score = total of <i>all</i> dice</li>
-                <li><b>4 of a Kind</b> — at least four dice the same; score = total of <i>all</i> dice</li>
-                <li><b>Full House</b> — three of one number and two of another; scores <b>25 points</b></li>
-                <li><b>Small Straight</b> — any four sequential numbers (e.g. 1-2-3-4); scores <b>30 points</b></li>
-                <li><b>Large Straight</b> — five sequential numbers (1-2-3-4-5 or 2-3-4-5-6); scores <b>40 points</b></li>
-                <li><b>Yahtzee</b> — five of a kind; scores <b>50 points</b></li>
-                <li><b>Chance</b> — any combination; score = total of <i>all</i> dice</li>
+                <li><b>3 of a Kind</b> — at least three dice the same; enter the total of all 5 dice (5–30)</li>
+                <li><b>4 of a Kind</b> — at least four dice the same; enter the total of all 5 dice (5–30)</li>
+                <li><b>Full House</b> — three of one number and two of another; scores a fixed <b>25 points</b></li>
+                <li><b>Small Straight</b> — any four sequential numbers; scores a fixed <b>30 points</b></li>
+                <li><b>Large Straight</b> — five sequential numbers (1–5 or 2–6); scores a fixed <b>40 points</b></li>
+                <li><b>Yahtzee</b> — five of a kind; scores a fixed <b>50 points</b></li>
+                <li><b>Chance</b> — any roll; enter the total of all 5 dice (5–30)</li>
             </ul>
+            <p>Fixed-score categories (Full House, Straights, Yahtzee) only offer their fixed value or 0 — no manual entry needed.</p>
 
             <h3 style='color: #BB86FC;'>Yahtzee Bonus</h3>
-            <p>If you roll a second (or further) Yahtzee in the same game <b>and</b> your Yahtzee box already holds a 50, you earn a <b>Yahtzee Bonus Chip worth 100 points</b>. Click the <b>+</b> button to record each bonus Yahtzee.</p>
-            <p><b><i>Please note</b></i>, the Joker rules below <b><i>do</b></i> apply.</p>
+            <p>If you roll a second (or further) Yahtzee in the same game <b>and</b> your Yahtzee box is already scored as <b>50</b>, click the <b>+</b> button in your Yahtzee Bonus row to add 100 points. Each click counts one bonus Yahtzee.</p>
+            <p>The Joker Rules below apply whenever a bonus Yahtzee is scored.</p>
 
-            <h3 style='color: #BB86FC;'>&#127183; Joker Rules</h3>
-            <p>A Yahtzee acts as a <b>Joker</b> only when <i>both</i> conditions are met:</p>
+            <hr style='border-color: #333;'/>
+            <h3 style='color: #BB86FC;'>🃏 Joker Rules</h3>
+            <p>A bonus Yahtzee acts as a Joker. When the <b>🃏 Joker Rules Active</b> banner appears, follow this priority in order:</p>
             <ol>
-                <li>The Yahtzee box has already been filled (with 50 <i>or</i> 0).</li>
-                <li>The matching Upper Section box is already filled.</li>
+                <li><b>Matching Upper box open?</b> You <i>must</i> score there (e.g. five 4s → score in Fours).</li>
+                <li><b>Matching Upper box full?</b> Score in any open Lower box using its full value:<br/>
+                    Full House = 25 pts &nbsp;|&nbsp; Small Straight = 30 pts &nbsp;|&nbsp; Large Straight = 40 pts<br/>
+                    3 of a Kind / 4 of a Kind / Chance = total of all 5 dice</li>
+                <li><b>All Lower boxes full?</b> Enter a <b>0</b> in any open Upper box.</li>
             </ol>
-            <p>When both conditions are met, score in the Lower Section as follows:</p>
+            <p>The scorecard highlights valid choices and dims invalid ones during a Joker turn. Hover over any cell for a reminder of which step applies.</p>
+
+            <hr style='border-color: #333;'/>
+            <h3 style='color: #BB86FC;'>Play Again Options</h3>
+            <p>At the end of a game the winner is announced and you are given three choices:</p>
             <ul>
-                <li><b>3 of a Kind, 4 of a Kind, or Chance</b> — score the total of all 5 dice</li>
-                <li><b>Full House</b> — score 25 points</li>
-                <li><b>Small Straight</b> — score 30 points</li>
-                <li><b>Large Straight</b> — score 40 points</li>
+                <li><b>▶ Same Order</b> — start a new game immediately with the identical turn order, no dialogs.</li>
+                <li><b>🎲 Roll for Order</b> — go straight to the Roll-Off screen (players pre-filled) to re-determine order.</li>
+                <li><b>✖ Quit</b> — exit the application.</li>
             </ul>
-            <p>If all Lower Section boxes are also filled, you must enter a <b>zero</b> in any open Upper Section box. You still receive the Bonus Chip.</p>
 
-            <h3 style='color: #BB86FC;'>In This App — Joker Turn Order</h3>
-            <ol>
-                <li><b>Score the Bonus:</b> Click <b>+</b> for 100 points (if first Yahtzee scored 50).</li>
-                <li><b>Mandatory Upper:</b> If the matching Upper box is open, you <b>must</b> score there.</li>
-                <li><b>Joker Choice:</b> If that Upper box is full, score in any open Lower box for full fixed points.</li>
-                <li><b>Last Resort:</b> If all Lower boxes are full, enter a zero in any open Upper box.</li>
-            </ol>
+            <h3 style='color: #BB86FC;'>High Scores</h3>
+            <p>The winner's score is saved automatically at the end of each game. The <b>High Scores</b> button shows the all-time top 10 winners stored in <i>yahtzee_highscores.json</i> in the same folder as the app.</p>
         """)
         layout.addWidget(rules_text)
         close_btn = QPushButton("Close")
@@ -122,23 +153,31 @@ class RulesDialog(QDialog):
         layout.addWidget(close_btn)
 
 class PlayerSetupDialog(QDialog):
-    def __init__(self):
+    def __init__(self, prefill=None):
         super().__init__()
         self.setWindowTitle("Yahtzee Registration")
         self.setFixedSize(400, 500)
-        self.player_inputs = [] 
+        self.player_inputs = []
         layout = QVBoxLayout(self)
         header = QLabel("Player Registration")
         header.setFont(QFont("Arial", 14, QFont.Weight.Bold))
         header.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(header)
+        hint = QLabel("💡 If rolling manually, enter players in turn order.")
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hint.setStyleSheet("color: #888888; font-size: 11px; padding-bottom: 4px;")
+        layout.addWidget(hint)
         self.scroll_area = QScrollArea()
         self.scroll_widget = QWidget()
         self.input_layout = QVBoxLayout(self.scroll_widget)
         self.scroll_area.setWidget(self.scroll_widget)
         self.scroll_area.setWidgetResizable(True)
         layout.addWidget(self.scroll_area)
-        self.add_player_slot()
+        if prefill:
+            for name in prefill:
+                self.add_player_slot(name)
+        else:
+            self.add_player_slot()
         btn_layout = QHBoxLayout()
         add_btn = QPushButton("+ Add Player")
         add_btn.clicked.connect(self.add_player_slot)
@@ -148,16 +187,18 @@ class PlayerSetupDialog(QDialog):
         btn_layout.addWidget(rem_btn)
         layout.addLayout(btn_layout)
         self.next_btn = QPushButton("Next: Determine Order")
-        self.next_btn.setStyleSheet(f"background-color: {CLR_ACCENT}; color: black;")
+        self.next_btn.setStyleSheet(accent_btn_style())
         self.next_btn.clicked.connect(self.accept)
         layout.addWidget(self.next_btn)
 
-    def add_player_slot(self):
+    def add_player_slot(self, name=""):
         if len(self.player_inputs) < 8:
             row_widget = QWidget()
             row_layout = QHBoxLayout(row_widget)
             inp = QLineEdit()
             inp.setPlaceholderText(f"Player {len(self.player_inputs) + 1}")
+            if name:
+                inp.setText(name)
             row_layout.addWidget(inp)
             self.input_layout.addWidget(row_widget)
             self.player_inputs.append((row_widget, inp))
@@ -167,69 +208,316 @@ class PlayerSetupDialog(QDialog):
             row_widget, _ = self.player_inputs.pop()
             row_widget.deleteLater()
 
+def _load_die_svg(face: int, color: str) -> bytes:
+    """Load images/{face}.svg and recolor the fill to `color`."""
+    path = os.path.join("images", f"{face}.svg")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            svg = f.read()
+    except FileNotFoundError:
+        svg = f'<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg"><rect width="16" height="16" fill="{color}"/></svg>'
+    svg = svg.replace('fill="#000000"', f'fill="{color}"')
+    svg = svg.replace("fill='#000000'", f"fill='{color}'")
+    return svg.encode("utf-8")
+
 class RollOffDialog(QDialog):
     def __init__(self, names):
         super().__init__()
         self.setWindowTitle("Roll-Off for Order")
-        self.setFixedSize(450, 550)
-        self.names, self.player_scores = names, {name: [] for name in names}
-        self.to_roll, self.sorted_names, self.animation_counter = list(names), [], 0
-        layout = QVBoxLayout(self)
-        self.info_lbl = QLabel("Rolling 5 dice to determine play order...")
-        layout.addWidget(self.info_lbl)
-        self.table = QTableWidget(len(names), 2)
-        self.table.setHorizontalHeaderLabels(["Player", "Roll Result"])
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        for i, name in enumerate(names):
-            self.table.setItem(i, 0, QTableWidgetItem(name))
-            score_item = QTableWidgetItem("-")
-            score_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.table.setItem(i, 1, score_item)
-        layout.addWidget(self.table)
-        self.btn_roll = QPushButton("🎲 Roll for All Players")
-        self.btn_roll.setStyleSheet(f"background-color: {CLR_ACCENT}; color: black;")
-        self.btn_roll.clicked.connect(self.start_animation)
-        layout.addWidget(self.btn_roll)
-        self.btn_start = QPushButton("Start Scoring")
-        self.btn_start.setEnabled(False)
-        self.btn_start.clicked.connect(self.accept)
-        layout.addWidget(self.btn_start)
-        self.timer = QTimer(); self.timer.timeout.connect(self.animate_roll)
+        self.setMinimumWidth(620)
 
+        # --- State (unchanged logic) ---
+        self.names          = names
+        self.player_scores  = {name: [] for name in names}
+        self.to_roll        = list(names)
+        self.sorted_names   = list(names)
+        self.animation_counter = 0
+        self._reveal_queue  = []   # names waiting for staggered reveal
+        self._final_rolls   = {}   # name -> final roll value
+
+        # --- Layout ---
+        outer = QVBoxLayout(self)
+        outer.setSpacing(12)
+        outer.setContentsMargins(20, 20, 20, 20)
+
+        title = QLabel("🎲 Roll-Off for Order")
+        title.setFont(QFont("Arial", 16, QFont.Weight.Bold))
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setStyleSheet(f"color: {CLR_ACCENT}; padding-bottom: 4px;")
+        outer.addWidget(title)
+
+        self.info_lbl = QLabel("Roll to determine play order — highest total goes first.")
+        self.info_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.info_lbl.setStyleSheet("color: #AAAAAA; font-size: 11px;")
+        outer.addWidget(self.info_lbl)
+
+        # --- Player cards ---
+        self.cards       = {}   # name -> card QWidget
+        self.dice_labels = {}   # name -> list of 5 QLabels
+        self.score_labels= {}   # name -> score QLabel
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; }")
+        card_container = QWidget()
+        self.card_layout = QVBoxLayout(card_container)
+        self.card_layout.setSpacing(8)
+        scroll.setWidget(card_container)
+        outer.addWidget(scroll)
+
+        for name in names:
+            self._build_card(name)
+
+        # --- Buttons ---
+        self.btn_roll = QPushButton("🎲 Roll for All Players")
+        self.btn_roll.setStyleSheet(accent_btn_style())
+        self.btn_roll.clicked.connect(self.start_animation)
+        outer.addWidget(self.btn_roll)
+
+        self.btn_start = QPushButton("Start Scoring")
+        self.btn_start.setStyleSheet(accent_btn_style())
+        self.btn_start.clicked.connect(self.accept)
+        outer.addWidget(self.btn_start)
+
+        # --- Timers ---
+        self.shake_timer  = QTimer(); self.shake_timer.timeout.connect(self._shake_tick)
+        self.reveal_timer = QTimer(); self.reveal_timer.timeout.connect(self._reveal_next)
+
+        self.adjustSize()
+
+    def _build_card(self, name):
+        card = QWidget()
+        card.setStyleSheet(
+            f"background-color: #1E1E1E; border: 1px solid #333333;"
+            f"border-radius: 8px; padding: 6px;"
+        )
+        row = QHBoxLayout(card)
+        row.setContentsMargins(12, 10, 12, 10)
+        row.setSpacing(14)
+
+        name_lbl = QLabel(name)
+        name_lbl.setFont(QFont("Arial", 12, QFont.Weight.Bold))
+        name_lbl.setFixedWidth(120)
+        row.addWidget(name_lbl)
+
+        dice_row = QHBoxLayout()
+        dice_row.setSpacing(0)
+        dice_row.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        dice_widgets = []
+        for i in range(5):
+            dice_row.addStretch(1)
+            d = QSvgWidget()
+            d.setFixedSize(44, 44)
+            d.load(QByteArray(_load_die_svg(1, "#2A2A2A")))  # hidden placeholder
+            dice_row.addWidget(d)
+            dice_widgets.append(d)
+        dice_row.addStretch(1)
+        row.addLayout(dice_row)
+
+        row.addStretch()
+
+        score_lbl = QLabel("—")
+        score_lbl.setFont(QFont("Arial", 14, QFont.Weight.Bold))
+        score_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        score_lbl.setStyleSheet("color: #666666; min-width: 40px;")
+        row.addWidget(score_lbl)
+
+        self.card_layout.addWidget(card)
+        self.cards[name]        = card
+        self.dice_labels[name]  = dice_widgets   # now QSvgWidgets
+        self.score_labels[name] = score_lbl
+
+    def _set_card_state(self, name, state):
+        """state: 'idle' | 'rolling' | 'done' | 'tie' | 'winner'"""
+        styles = {
+            "idle":    ("border: 1px solid #333333;",           "#AAAAAA", "#555555"),
+            "rolling": (f"border: 2px solid {CLR_ACCENT};",     "white",   CLR_ACCENT),
+            "done":    ("border: 1px solid #444444;",           "#CCCCCC", CLR_CLAIMED_TEXT),
+            "tie":     ("border: 2px solid #FFD700;",           "#FFD700", "#FFD700"),
+            "winner":  (f"border: 2px solid {CLR_ACCENT};",     CLR_ACCENT, CLR_ACCENT),
+        }
+        border, name_color, score_color = styles.get(state, styles["idle"])
+        self.cards[name].setStyleSheet(
+            f"background-color: #1E1E1E; {border} border-radius: 8px; padding: 6px;"
+        )
+        # update name label color
+        self.cards[name].findChild(QLabel).setStyleSheet(f"color: {name_color};")
+        self.score_labels[name].setStyleSheet(f"color: {score_color}; min-width: 36px;")
+
+    # ------------------------------------------------------------------ #
+    #  Animation: shake all rolling players simultaneously                 #
+    # ------------------------------------------------------------------ #
     def start_animation(self):
         self.btn_roll.setEnabled(False)
         self.animation_counter = 0
-        self.timer.start(50)
+        for name in self.to_roll:
+            self._set_card_state(name, "rolling")
+            self.score_labels[name].setText("—")
+        self.shake_timer.start(60)
 
-    def animate_roll(self):
+    def _shake_tick(self):
         self.animation_counter += 1
         for name in self.to_roll:
-            idx = self.names.index(name)
-            self.table.item(idx, 1).setText(str(sum(random.randint(1, 6) for _ in range(5))))
-        if self.animation_counter > 20:
-            self.timer.stop()
-            self.finalize_roll()
+            vals = [random.randint(1, 6) for _ in range(5)]
+            for widget, v in zip(self.dice_labels[name], vals):
+                widget.load(QByteArray(_load_die_svg(v, CLR_ACCENT)))
+        if self.animation_counter >= 18:
+            self.shake_timer.stop()
+            self._compute_final_rolls()
 
+    # ------------------------------------------------------------------ #
+    #  Staggered reveal: lock in one player at a time                      #
+    # ------------------------------------------------------------------ #
+    def _compute_final_rolls(self):
+        self._final_rolls = {}
+        for name in self.to_roll:
+            dice = [random.randint(1, 6) for _ in range(5)]
+            self._final_rolls[name] = (dice, sum(dice))
+        # reveal in the order they were listed (drama!)
+        self._reveal_queue = list(self.to_roll)
+        self.reveal_timer.start(420)
+
+    def _reveal_next(self):
+        if not self._reveal_queue:
+            self.reveal_timer.stop()
+            self.finalize_roll()
+            return
+        name = self._reveal_queue.pop(0)
+        dice, total = self._final_rolls[name]
+        for widget, v in zip(self.dice_labels[name], dice):
+            widget.load(QByteArray(_load_die_svg(v, "#FFFFFF")))
+        self.score_labels[name].setText(str(total))
+        self._set_card_state(name, "done")
+
+    # ------------------------------------------------------------------ #
+    #  Finalize (same logic as before)                                     #
+    # ------------------------------------------------------------------ #
     def finalize_roll(self):
         for name in self.to_roll:
-            idx, roll = self.names.index(name), sum(random.randint(1, 6) for _ in range(5))
+            _, roll = self._final_rolls[name]
             self.player_scores[name].append(roll)
-            self.table.item(idx, 1).setText(str(roll))
-        hist = list(self.player_scores.values())
-        self.to_roll = [n for n in self.names if hist.count(self.player_scores[n]) > 1]
+
+        # detect ties using last round's scores
+        last_scores = {n: self.player_scores[n][-1] for n in self.to_roll}
+        max_score   = max(last_scores.values())
+        tied        = [n for n, s in last_scores.items() if s == max_score]
+
+        self.to_roll = tied if len(tied) > 1 else []
+
         if not self.to_roll:
-            self.sorted_names = sorted(self.names, key=lambda n: self.player_scores[n], reverse=True)
-            self.btn_start.setEnabled(True)
-            self.btn_start.setStyleSheet(f"background-color: {CLR_ACCENT}; color: black;")
+            self.sorted_names = sorted(self.names,
+                key=lambda n: self.player_scores[n][-1], reverse=True)
+            # Reorder cards visually to match sorted order
+            for name in self.sorted_names:
+                self.card_layout.removeWidget(self.cards[name])
+                self.card_layout.addWidget(self.cards[name])
+            # highlight winner(s)
+            for name in self.names:
+                self._set_card_state(name, "winner" if name == self.sorted_names[0] else "done")
+            self.info_lbl.setText(f"🏆 {self.sorted_names[0]} goes first!")
+            self.info_lbl.setStyleSheet(f"color: {CLR_ACCENT}; font-size: 12px; font-weight: bold;")
+            self.btn_start.setStyleSheet(accent_btn_style())
         else:
-            self.btn_roll.setEnabled(True)
+            for name in self.to_roll:
+                self._set_card_state(name, "tie")
+            for name in self.names:
+                if name not in self.to_roll:
+                    self._set_card_state(name, "done")
+            self.info_lbl.setText(f"⚠️  Tie! {', '.join(self.to_roll)} must re-roll.")
+            self.info_lbl.setStyleSheet("color: #FFD700; font-size: 11px;")
             self.btn_roll.setText(f"🎲 Resolve Tie ({len(self.to_roll)} players)")
+            self.btn_roll.setEnabled(True)
+
+class GameOverDialog(QDialog):
+    SAME_ORDER = 1
+    ROLL_ORDER = 2
+    QUIT       = 0
+
+    PLACE_MEDALS = {1: "🥇", 2: "🥈", 3: "🥉"}
+
+    def __init__(self, scores, parent=None):
+        """scores: list of (name, score) sorted descending."""
+        super().__init__(parent)
+        self.setWindowTitle("Game Over!")
+        self.setMinimumWidth(380)
+        self.result_choice = self.QUIT
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+        layout.setContentsMargins(20, 20, 20, 20)
+
+        winner_name, winner_score = scores[0]
+        msg = QLabel(f"🏆  {winner_name} wins with {winner_score} pts!")
+        msg.setFont(QFont("Arial", 13, QFont.Weight.Bold))
+        msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        msg.setStyleSheet(f"color: {CLR_ACTIVE_TURN}; padding-bottom: 4px;")
+        layout.addWidget(msg)
+
+        # --- Leaderboard ---
+        for place, (name, score) in enumerate(scores, start=1):
+            row_widget = QWidget()
+            row_widget.setStyleSheet(
+                f"background-color: {'#2A2200' if place == 1 else '#1E1E1E'};"
+                f"border: 1px solid {'#FFD700' if place == 1 else '#333333'};"
+                f"border-radius: 6px;"
+            )
+            row = QHBoxLayout(row_widget)
+            row.setContentsMargins(12, 6, 12, 6)
+
+            medal = self.PLACE_MEDALS.get(place, f"#{place}")
+            place_lbl = QLabel(medal)
+            place_lbl.setFont(QFont("Arial", 13))
+            place_lbl.setFixedWidth(32)
+            row.addWidget(place_lbl)
+
+            name_lbl = QLabel(name)
+            name_lbl.setFont(QFont("Arial", 11, QFont.Weight.Bold))
+            name_lbl.setStyleSheet(f"color: {'#FFD700' if place == 1 else '#CCCCCC'};")
+            row.addWidget(name_lbl)
+
+            row.addStretch()
+
+            score_lbl = QLabel(f"{score} pts")
+            score_lbl.setFont(QFont("Arial", 11))
+            score_lbl.setStyleSheet(f"color: {'#FFD700' if place == 1 else '#AAAAAA'};")
+            row.addWidget(score_lbl)
+
+            layout.addWidget(row_widget)
+
+        # --- Buttons ---
+        layout.addSpacing(4)
+        sub = QLabel("Play again?")
+        sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        sub.setStyleSheet("color: #AAAAAA; font-size: 11px;")
+        layout.addWidget(sub)
+
+        btn_same = QPushButton("▶  Same Order")
+        btn_same.setStyleSheet(accent_btn_style())
+        btn_same.clicked.connect(lambda: self._pick(self.SAME_ORDER))
+        layout.addWidget(btn_same)
+
+        btn_roll = QPushButton("🎲  Roll for Order")
+        btn_roll.setStyleSheet(purple_btn_style())
+        btn_roll.clicked.connect(lambda: self._pick(self.ROLL_ORDER))
+        layout.addWidget(btn_roll)
+
+        btn_quit = QPushButton("✖  Quit")
+        btn_quit.clicked.connect(lambda: self._pick(self.QUIT))
+        layout.addWidget(btn_quit)
+
+        self.adjustSize()
+
+    def _pick(self, choice):
+        self.result_choice = choice
+        self.accept()
 
 class YahtzeeScorecard(QMainWindow):
     def __init__(self, players):
         super().__init__()
         self.players, self.current_turn_index, self.play_again_requested, self._is_updating = players, 0, False, False
-        self.joker_active = False # Sticky Joker Rule Flag
+        self.joker_active = False
+        self._correction_pending = False
+        self._last_unclaimed_name = ""
+        self._correction_replaced_msg = ""
         
         self.setWindowTitle("Yahtzee! Pro Scorecard")
         self.resize(1100, 900)
@@ -258,7 +546,44 @@ class YahtzeeScorecard(QMainWindow):
         rules.clicked.connect(self.show_rules)
         btns.addWidget(high_score_btn); btns.addWidget(reset); btns.addWidget(rules)
         layout.addLayout(btns)
-        
+
+        # --- Status Bar (two rows, evenly spaced) ---
+        sb_widget = QStatusBar()
+        sb_widget.setSizeGripEnabled(False)
+        sb_container = QWidget()
+        sb_outer = QVBoxLayout(sb_container)
+        sb_outer.setContentsMargins(8, 3, 8, 3)
+        sb_outer.setSpacing(1)
+
+        self._sb_row1 = QLabel()
+        self._sb_row2 = QLabel()
+        self._sb_row1.setTextFormat(Qt.TextFormat.RichText)
+        self._sb_row2.setTextFormat(Qt.TextFormat.RichText)
+        self._sb_row1.setStyleSheet(f"background-color: {CLR_TABLE}; font-size: 11px;")
+        self._sb_row2.setStyleSheet(f"background-color: {CLR_TABLE}; font-size: 11px;")
+
+        sb_outer.addWidget(self._sb_row1)
+        sb_outer.addWidget(self._sb_row2)
+
+        sb_widget.addWidget(sb_container, 1)
+        sb_widget.setStyleSheet(
+            f"QStatusBar {{ background-color: {CLR_TABLE}; border-top: 1px solid #333333; }}"
+            f"QStatusBar::item {{ border: none; }}"
+        )
+        self.setStatusBar(sb_widget)
+
+        # Internal data cache for status bar
+        self._sb_data = {
+            'leader': '', 'scores': '', 'last': '',
+            'upper': '', 'upper_color': '#AAAAAA',
+            'best': '', 'streak': '', 'alltime': '',
+        }
+        self._load_alltime_high()
+
+        # Streak tracking state
+        self._streak_player = None
+        self._streak_count  = 0
+
         self.update_turn_ui()
 
     def closeEvent(self, event):
@@ -313,20 +638,88 @@ class YahtzeeScorecard(QMainWindow):
         combo.currentIndexChanged.connect(self.handle_dropdown)
         self.table.setCellWidget(r, c, combo)
 
+    def _update_upper_dropdowns(self, c):
+        """Swap upper section dropdown options based on joker state for the active column."""
+        is_active = (c == self.current_turn_index)
+        for r in UPPER_SECTION:
+            combo = self.table.cellWidget(r, c)
+            if not combo or not isinstance(combo, QComboBox): continue
+            if self.table.item(r, c).data(Qt.ItemDataRole.UserRole) == "claimed": continue
+            self._is_updating = True
+            current = combo.currentText()
+            combo.clear()
+            if is_active and self.joker_active:
+                combo.addItems(["-", "5", "0"])
+            else:
+                combo.addItems(["-", "0", "1", "2", "3", "4", "5"])
+            # restore selection if still valid, else reset to "-"
+            idx = combo.findText(current)
+            combo.setCurrentIndex(idx if idx >= 0 else 0)
+            self._is_updating = False
+
+    def _update_streak(self, c, score):
+        if score > 0:
+            if getattr(self, '_streak_player', None) == self.players[c]:
+                self._streak_count += 1
+            else:
+                self._streak_player = self.players[c]
+                self._streak_count  = 1
+        else:
+            if getattr(self, '_streak_player', None) == self.players[c]:
+                self._streak_player = None
+                self._streak_count  = 0
+
     def handle_dropdown(self, index):
         if self._is_updating: return
         combo = self.sender()
         r, c = combo.property("row"), combo.property("col")
-        if combo.currentText() == "-": return
 
         self._is_updating = True
         item = self.table.item(r, c)
+        status = item.data(Qt.ItemDataRole.UserRole)
+
+        # ── Reset to "-" — free correction, no turn impact ────────────
+        if combo.currentText() == "-":
+            if status == "claimed":
+                self._last_unclaimed_name = ROW_LABELS[r]
+                item.setData(Qt.ItemDataRole.UserRole, "unclaimed")
+                item.setText("-")
+                self._correction_pending = True
+                self.recalc(c)
+                self.update_turn_ui()
+            self._is_updating = False
+            return
+
+        old_val = item.text()  # capture before overwriting
         score = int(combo.currentText()) * (r + 1) if r in UPPER_SECTION else int(combo.currentText())
         item.setText(str(score))
         item.setData(Qt.ItemDataRole.UserRole, "claimed")
-        
-        self.recalc(c)
-        self.advance_to_next_player() 
+
+        if status == "unclaimed" and self._correction_pending:
+            # ── Filling the reset box (replacement) — still their turn ─
+            self._correction_pending = False
+            self._correction_replaced_msg = (
+                f"✔  {self._last_unclaimed_name} replaced by {ROW_LABELS[r]} — now score your current turn"
+            )
+            self.recalc(c)
+            self.update_turn_ui()
+
+        elif status == "unclaimed":
+            # ── Normal turn score — end the turn ──────────────────────
+            self._correction_replaced_msg = ""
+            self._last_score_msg = f"Last score: {self.players[c]} → {ROW_LABELS[r]}  {score} pts"
+            self._update_streak(c, score)
+            self.recalc(c)
+            self.advance_to_next_player()
+
+        else:
+            # ── Editing an already-claimed box — free edit, show alert, no turn impact
+            self._correction_replaced_msg = (
+                f"✔  {ROW_LABELS[r]} changed from {old_val} to {score} pts — now score your current turn"
+            )
+            self.recalc(c)
+            self.update_turn_ui()
+
         self._is_updating = False
 
     def increment_yahtzee_bonus(self, c):
@@ -340,12 +733,16 @@ class YahtzeeScorecard(QMainWindow):
         item.setText(str(val))
         self.table.cellWidget(15, c).findChild(QLabel).setText(str(val))
         
+        self._last_score_msg = f"Last score: {self.players[c]} → Yahtzee Bonus  +100 pts"
         self.joker_active = True
         self.recalc(c)
         self.update_turn_ui()
 
     def advance_to_next_player(self):
-        self.joker_active = False # Reset sticky flag
+        self.joker_active = False
+        self._correction_pending = False
+        self._last_unclaimed_name = ""
+        self._correction_replaced_msg = ""
         total = len(self.players)
         for _ in range(total):
             self.current_turn_index = (self.current_turn_index + 1) % total
@@ -357,44 +754,192 @@ class YahtzeeScorecard(QMainWindow):
     def player_has_turns_left(self, c):
         return any(self.table.item(r, c).data(Qt.ItemDataRole.UserRole) == "unclaimed" for r in PRIMARY_CATEGORIES)
 
+    def _load_alltime_high(self):
+        """Read the top score from yahtzee_highscores.json and cache it."""
+        filename = "yahtzee_highscores.json"
+        try:
+            if os.path.exists(filename):
+                with open(filename, "r") as f:
+                    data = json.load(f)
+                if data:
+                    top = data[0]
+                    self._sb_data['alltime'] = f"🏅 All-time: {top['name']} {top['score']} pts ({top['date']})"
+                    return
+        except Exception:
+            pass
+        self._sb_data['alltime'] = "🏅 All-time: —"
+
+    def _render_status_bar(self):
+        """Re-render both rows as evenly-spaced HTML tables."""
+        d = self._sb_data
+
+        def cell3(text, color, align="left", bold=False):
+            weight = "font-weight:bold;" if bold else ""
+            return (f"<td width='33%' style='color:{color};{weight}"
+                    f"text-align:{align};white-space:nowrap;padding:0 4px;'>{text}</td>")
+
+        def cell4(text, color, align="left", bold=False):
+            weight = "font-weight:bold;" if bold else ""
+            return (f"<td width='25%' style='color:{color};{weight}"
+                    f"text-align:{align};white-space:nowrap;padding:0 4px;'>{text}</td>")
+
+        row1 = (
+            "<table width='100%' cellspacing='0' cellpadding='0'><tr>"
+            + cell3(d['leader'],  CLR_ACTIVE_TURN,  "left",   bold=True)
+            + cell3(d['scores'],  CLR_ACCENT,        "center")
+            + cell3(d['last'],    CLR_CLAIMED_TEXT,  "right")
+            + "</tr></table>"
+        )
+        row2 = (
+            "<table width='100%' cellspacing='0' cellpadding='0'><tr>"
+            + cell4(d['upper'],   d['upper_color'],  "left")
+            + cell4(d['streak'],  "#FF8C00",         "center")
+            + cell4(d['best'],    "#BB86FC",         "center")
+            + cell4(d['alltime'], "#AAAAAA",         "right")
+            + "</tr></table>"
+        )
+        self._sb_row1.setText(row1)
+        self._sb_row2.setText(row2)
+
+    def update_status_bar(self):
+        if not hasattr(self, '_sb_data'): return
+
+        totals = [int(self.table.item(18, c).text()) for c in range(len(self.players))]
+        curr = self.current_turn_index
+        d = self._sb_data
+
+        # Row 1 — Leader
+        best_c = totals.index(max(totals))
+        d['leader'] = f"🏆 {self.players[best_c]} leading ({totals[best_c]} pts)"
+
+        # Row 1 — Score Snapshot
+        d['scores'] = "  ".join(f"{self.players[c]}: {totals[c]}" for c in range(len(self.players)))
+
+        # Row 1 — Last Score
+        d['last'] = getattr(self, '_last_score_msg', "")
+
+        # Row 2 — Upper Bonus Progress (active player)
+        u_sum = sum(int(self.table.item(r, curr).text()) for r in range(6) if self.table.item(r, curr).text().isdigit())
+        if u_sum >= 63:
+            d['upper'] = f"Upper: {self.players[curr]} {u_sum}/63 ✓ Bonus earned!"
+            d['upper_color'] = CLR_ACCENT
+        else:
+            d['upper'] = f"Upper: {self.players[curr]} {u_sum}/63 — {63 - u_sum} needed for bonus"
+            d['upper_color'] = '#AAAAAA'
+
+        # Row 2 — Highest Single Score This Game
+        best_score, best_who, best_cat = 0, "", ""
+        for c in range(len(self.players)):
+            for r in PRIMARY_CATEGORIES:
+                item = self.table.item(r, c)
+                if item and item.data(Qt.ItemDataRole.UserRole) == "claimed":
+                    val = int(item.text()) if item.text().lstrip('-').isdigit() else 0
+                    if val > best_score:
+                        best_score, best_who, best_cat = val, self.players[c], ROW_LABELS[r]
+        d['best'] = f"🎯 Best: {best_who} → {best_cat} ({best_score} pts)" if best_who else "🎯 Best: —"
+
+        # Row 2 — Scoring Streak (falls back to closest competitor)
+        streak_p = getattr(self, '_streak_player', None)
+        streak_n = getattr(self, '_streak_count', 0)
+        if streak_p and streak_n >= 2:
+            d['streak'] = f"{'🔥' * min(streak_n, 3)} {streak_p}: {streak_n}-turn streak"
+        else:
+            sorted_totals = sorted(enumerate(totals), key=lambda x: x[1], reverse=True)
+            if len(sorted_totals) >= 2:
+                leader_i, leader_score = sorted_totals[0]
+                second_i, second_score = sorted_totals[1]
+                gap = leader_score - second_score
+                if gap == 0:
+                    d['streak'] = f"📊 {self.players[leader_i]} & {self.players[second_i]} tied!"
+                else:
+                    d['streak'] = f"📊 {self.players[second_i]} trails {self.players[leader_i]} by {gap} pts"
+            else:
+                d['streak'] = ""
+
+        self._render_status_bar()
+
     def update_turn_ui(self):
         curr = self.current_turn_index
-        # Sticky Message Logic
+        CLR_PENDING = "#7A4800"   # amber-dark for pending reclaim bg
+        CLR_PENDING_BORDER = "#FFB300"  # amber highlight
+
+        # Turn label priority: Joker > Correction > Normal
         if self.joker_active:
-            self.turn_label.setText("Joker Rules apply!")
-            self.turn_label.setStyleSheet(f"color: {CLR_ACCENT}; border: 2px solid {CLR_ACCENT}; padding: 5px;")
+            self.turn_label.setText(
+                "🃏 Joker Rules Active  —  "
+                "① Score matching Upper box if open  "
+                "② Otherwise score any open Lower box  "
+                "③ If all Lower full, take 0 in any Upper box"
+            )
+            self.turn_label.setStyleSheet(
+                f"color: {CLR_ACCENT}; border: 2px solid {CLR_ACCENT}; "
+                f"padding: 6px; font-size: 11px;"
+            )
+        elif self._correction_replaced_msg:
+            self.turn_label.setText(self._correction_replaced_msg)
+            self.turn_label.setStyleSheet(
+                f"color: #4CAF50; border: 2px solid #4CAF50; "
+                f"padding: 6px; font-size: 11px;"
+            )
+        elif self._correction_pending:
+            self.turn_label.setText(
+                f"⚠️  {self._last_unclaimed_name} unclaimed — fill any box to replace it, then score your turn"
+            )
+            self.turn_label.setStyleSheet(
+                f"color: {CLR_PENDING_BORDER}; border: 2px solid {CLR_PENDING_BORDER}; "
+                f"padding: 6px; font-size: 11px;"
+            )
         else:
             self.turn_label.setText(f"Active Turn: {self.players[curr]}")
             self.turn_label.setStyleSheet(f"color: {CLR_ACTIVE_TURN}; padding: 10px;")
 
+        UPPER_TOOLTIP = "① Joker: score here first if this matches your five-of-a-kind number."
+        LOWER_TOOLTIP = "② Joker: score here if your matching Upper box is already claimed."
+
         for c in range(self.table.columnCount()):
             is_active = (c == curr)
             self.update_yahtzee_bonus_state(c)
-            
+            self._update_upper_dropdowns(c)
+
             for r in range(self.table.rowCount()):
                 item, widget = self.table.item(r, c), self.table.cellWidget(r, c)
                 if not item or r in CALCULATED_ROWS: continue
-                
+
                 status = item.data(Qt.ItemDataRole.UserRole)
                 bg = CLR_TABLE if status == "claimed" else (CLR_ACTIVE_UNCLAIMED if is_active else CLR_UNCLAIMED)
-                
+
                 # JOKER DIMMING LOGIC
                 if is_active and self.joker_active and status == "unclaimed":
-                    # In a real game, the code would know the dice. Here we dim based on Joker Rule context:
-                    # Lower Section becomes the "Joker" playground.
                     if r not in LOWER_SECTION_PRIMARY and r not in UPPER_SECTION:
                         bg = CLR_DISABLED
-                
+
                 item.setBackground(QColor(bg))
+                item.setForeground(QBrush(QColor("#E0E0E0")))
+
+                # Joker tooltips
+                if is_active and self.joker_active and status == "unclaimed":
+                    if r in UPPER_SECTION:
+                        item.setToolTip(UPPER_TOOLTIP)
+                        if widget: widget.setToolTip(UPPER_TOOLTIP)
+                    elif r in LOWER_SECTION_PRIMARY:
+                        item.setToolTip(LOWER_TOOLTIP)
+                        if widget: widget.setToolTip(LOWER_TOOLTIP)
+                else:
+                    item.setToolTip("")
+                    if widget: widget.setToolTip("")
+
                 if widget:
                     txt = CLR_CLAIMED_TEXT if status == "claimed" else "white"
                     widget.setStyleSheet(f"background-color: {bg}; color: {txt}; border: none;")
-                    widget.setEnabled(is_active)
+                    if r != 15:  # bonus cell managed exclusively by update_yahtzee_bonus_state
+                        widget.setEnabled(is_active)
+
+        self.update_status_bar()
 
     def update_yahtzee_bonus_state(self, c):
         widget = self.table.cellWidget(15, c)
         if not widget: return
-        can_bonus = self.table.item(14, c).text() == "50"
+        can_bonus = self.table.item(14, c).text() == "50" and not self.joker_active
         widget.setEnabled(can_bonus and c == self.current_turn_index)
         widget.setStyleSheet(f"background-color: {CLR_ACCENT if can_bonus else CLR_DISABLED};")
 
@@ -412,19 +957,17 @@ class YahtzeeScorecard(QMainWindow):
     def check_game_over(self):
         for c in range(self.table.columnCount()):
             if self.player_has_turns_left(c): return
-            
-        # Calculate final scores
+
         scores = sorted([(self.players[i], int(self.table.item(18, i).text())) for i in range(len(self.players))], key=lambda x: x[1], reverse=True)
-        
-        # Save the winner's stats automatically
         winner_name, winner_score = scores[0][0], scores[0][1]
         self.save_high_score(winner_name, winner_score)
-        
-        res = QMessageBox.question(self, "Game Over", f"Winner: {winner_name} ({winner_score} pts)\nPlay Again?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        if res == QMessageBox.StandardButton.Yes: 
-            self.play_again_requested = True
-            
-        # Close the window cleanly
+
+        dlg = GameOverDialog(scores, self)
+        dlg.exec()
+        choice = dlg.result_choice
+        self.play_again_requested = choice in (GameOverDialog.SAME_ORDER, GameOverDialog.ROLL_ORDER)
+        self.roll_for_order = (choice == GameOverDialog.ROLL_ORDER)
+
         self.close()
 
     def save_high_score(self, name, score):
@@ -452,6 +995,7 @@ class YahtzeeScorecard(QMainWindow):
         # Save back to file
         with open(filename, "w") as f:
             json.dump(scores_data, f, indent=4)
+        self._load_alltime_high()
 
     def show_high_scores(self):
         filename = "yahtzee_highscores.json"
@@ -496,24 +1040,53 @@ class YahtzeeScorecard(QMainWindow):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setStyleSheet(DARK_STYLESHEET)
-    
+
+    ordered_names = None  # set after first rolloff; reused on Same Order
+
     while True:
-        setup = PlayerSetupDialog()
-        if not setup.exec(): # User closed the dialog manually
-            break
-            
-        names = [i.text().strip() or f"P{idx+1}" for idx, (_, i) in enumerate(setup.player_inputs)]
+        # --- Registration (skipped on Same Order) ---
+        if ordered_names is None:
+            setup = PlayerSetupDialog()
+            if not setup.exec():
+                break
+            names = [i.text().strip() or f"P{idx+1}" for idx, (_, i) in enumerate(setup.player_inputs)]
+        else:
+            names = ordered_names  # carry existing players straight to rolloff
+
+        # --- Roll-off ---
         rolloff = RollOffDialog(names)
-        
-        if not rolloff.exec(): # User closed the dialog manually
+        if not rolloff.exec():
             break
-            
-        w = YahtzeeScorecard(rolloff.sorted_names)
+        ordered_names = rolloff.sorted_names
+
+        # --- Game ---
+        w = YahtzeeScorecard(ordered_names)
         w.loop = QEventLoop()
         w.show()
         w.loop.exec()
-        
-        if not getattr(w, 'play_again_requested', False): 
-            break
-            
+
+        if not getattr(w, 'play_again_requested', False):
+            sys.exit(0)
+
+        if not getattr(w, 'roll_for_order', False):
+            # Same Order: skip registration AND rolloff, restart immediately
+            w2_names = ordered_names
+            while True:
+                w2 = YahtzeeScorecard(w2_names)
+                w2.loop = QEventLoop()
+                w2.show()
+                w2.loop.exec()
+
+                if not getattr(w2, 'play_again_requested', False):
+                    sys.exit(0)
+
+                if getattr(w2, 'roll_for_order', False):
+                    ordered_names = w2_names  # go to rolloff with these players
+                    break
+                # else: same order again — keep looping
+            # fall through to top of outer loop → rolloff with ordered_names
+
+        # Roll for Order: ordered_names already set, outer loop goes to rolloff
+        # (registration skipped because ordered_names is not None)
+
     sys.exit(0)

@@ -232,8 +232,9 @@ class RollOffDialog(QDialog):
         self.to_roll        = list(names)
         self.sorted_names   = list(names)
         self.animation_counter = 0
-        self._reveal_queue  = []   # names waiting for staggered reveal
-        self._final_rolls   = {}   # name -> final roll value
+        self._reveal_queue  = []
+        self._final_rolls   = {}
+        self._order_score   = {}   # name -> definitive score used for final sort
 
         # --- Layout ---
         outer = QVBoxLayout(self)
@@ -396,22 +397,33 @@ class RollOffDialog(QDialog):
         for name in self.to_roll:
             _, roll = self._final_rolls[name]
             self.player_scores[name].append(roll)
+            self._order_score[name] = roll
 
-        # detect ties using last round's scores
+        # Find ALL score groups among players who just rolled
         last_scores = {n: self.player_scores[n][-1] for n in self.to_roll}
-        max_score   = max(last_scores.values())
-        tied        = [n for n, s in last_scores.items() if s == max_score]
 
-        self.to_roll = tied if len(tied) > 1 else []
+        # Group players by score
+        from collections import defaultdict
+        score_groups = defaultdict(list)
+        for n, s in last_scores.items():
+            score_groups[s].append(n)
+
+        # Any group with more than one player needs a re-roll
+        self.to_roll = []
+        for score, group in score_groups.items():
+            if len(group) > 1:
+                self.to_roll.extend(group)
 
         if not self.to_roll:
-            self.sorted_names = sorted(self.names,
-                key=lambda n: self.player_scores[n][-1], reverse=True)
-            # Reorder cards visually to match sorted order
+            # No ties — sort all players by definitive order score
+            self.sorted_names = sorted(
+                self.names,
+                key=lambda n: self._order_score.get(n, 0),
+                reverse=True
+            )
             for name in self.sorted_names:
                 self.card_layout.removeWidget(self.cards[name])
                 self.card_layout.addWidget(self.cards[name])
-            # highlight winner(s)
             for name in self.names:
                 self._set_card_state(name, "winner" if name == self.sorted_names[0] else "done")
             self.info_lbl.setText(f"🏆 {self.sorted_names[0]} goes first!")

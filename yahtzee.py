@@ -60,8 +60,10 @@ class RulesDialog(QDialog):
             <h3 style='color: #BB86FC;'>Object of the Game</h3>
             <p>Obtain the highest score for one or more games. The player with the highest total score for all games (up to 6 games) wins.</p>
 
+            <h3 style='color: #BB86FC;'>Order of Play</h3>
+            <p>This program automatically determines order of play by a randomizer, order of play is determined by highest to lowest. Any tie rolls between any number of players will trigger a re-roll for all players that have tied.</p>
+
             <h3 style='color: #BB86FC;'>How to Play</h3>
-            <p>Each player rolls all five dice to determine who goes first — highest total starts. Play continues clockwise.</p>
             <p>Each turn consists of a maximum of <b>three rolls</b>. The first roll must use all five dice. On the second and third rolls, the player may set aside any dice and re-roll the rest. After the final roll, the player <b>must</b> enter a score (or a zero) in one open box.</p>
 
             <h3 style='color: #BB86FC;'>Upper Section</h3>
@@ -89,9 +91,8 @@ class RulesDialog(QDialog):
 
             <h3 style='color: #BB86FC;'>Yahtzee Bonus</h3>
             <p>If you roll a second (or further) Yahtzee in the same game <b>and</b> your Yahtzee box already holds a 50, you earn a <b>Yahtzee Bonus Chip worth 100 points</b>. Click the <b>+</b> button to record each bonus Yahtzee.</p>
-            <p>The second Yahtzee must first be scored in the matching Upper Section box. If that box is already filled, the Joker rules below apply.</p>
+            <p><b><i>Please note</b></i>, the Joker rules below <b><i>do</b></i> apply.</p>
 
-            <hr style='border-color: #444;'/>
             <h3 style='color: #BB86FC;'>&#127183; Joker Rules</h3>
             <p>A Yahtzee acts as a <b>Joker</b> only when <i>both</i> conditions are met:</p>
             <ol>

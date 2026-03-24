@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-yahtzee.py — Pro Yahtzee Scorecard + Optional Digital Roller
+yahtzee.py — Pro Yahtzii Scorecard + Optional Digital Roller
 Merged from yahtzee.py (scorecard) and roll.py (animated roller).
 
 Requires: pip install PyQt6 PyQt6-Qt6 PyQt6-sip
@@ -10,6 +10,7 @@ Run:      python yahtzee.py
 import sys
 import random
 import time
+import math
 import json
 import os
 from datetime import datetime
@@ -24,9 +25,10 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QTimer, QEventLoop, QByteArray, QElapsedTimer, QRectF
 from PyQt6.QtGui import (
-    QColor, QFont, QBrush, QPainter, QPen, QPalette,
+    QColor, QFont, QBrush, QPainter, QPen, QPalette, QPixmap,
 )
 from PyQt6.QtSvgWidgets import QSvgWidget
+from PyQt6.QtSvg import QSvgRenderer
 
 # ============================================================================
 # THEME — Midnight Steel (scorecard)
@@ -82,7 +84,7 @@ ROW_LABELS = (
     ["Ones", "Twos", "Threes", "Fours", "Fives", "Sixes"] +
     ["Sum", "Bonus (35)", "Total Upper"] +
     ["3 of a Kind", "4 of a Kind", "Full House", "Small Straight",
-     "Large Straight", "Yahtzee", "Yahtzee Bonus (Count)", "Chance"] +
+     "Large Straight", "Yahtzii", "Yahtzii Bonus (Count)", "Chance"] +
     ["Total Lower", "GRAND TOTAL"]
 )
 
@@ -137,89 +139,261 @@ class DieWidget(QWidget):
 
     def __init__(self, index: int, parent=None):
         super().__init__(parent)
-        self.index   = index
-        self.face    = 1
-        self.held    = False
-        self.rolling = False
-        self.setFixedSize(self.SIZE + 12, self.SIZE + 26)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.index    = index
+        self.face     = 1
+        self.held     = False
+        self.rolling  = False
+        self.blank    = False
 
-        self.svg = QSvgWidget(self)
-        self.svg.setFixedSize(self.SIZE, self.SIZE)
-        self.svg.move(6, 4)
+        # Animation state driven by the roller each frame
+        self.anim_t        = 0.0
+        self.anim_settled  = False
+
+        # 3-D flip state
+        self.spin_angle    = 0.0    # cumulative Y-rotation degrees
+        self.snap_target   = 0.0    # nearest 360° multiple to snap to on settle
+        self.snap_t        = -1.0   # -1 = no snap; 0→1 = snap progress
+        self.SNAP_DUR      = 80     # ms for the snap-to-upright tween
+        self.visual_face   = 1
+
+        # Landing bounce: -1 = not yet; 0→1 = progress
+        self.land_t        = -1.0
+        self.land_start    = 0.0    # per-die timestamp (not shared)
+        self.LAND_DUR      = 260    # ms
+
+        # Held idle pulse
+        self.pulse_t       = 0.0    # driven by the roller's idle timer
+
+        self.setFixedSize(self.SIZE + 12, self.SIZE + 30)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         self.held_label = QLabel("HELD", self)
         self.held_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.held_label.setFixedWidth(self.SIZE + 12)
-        self.held_label.move(0, self.SIZE + 6)
+        self.held_label.move(0, self.SIZE + 10)
         self.held_label.setStyleSheet(
             "color: #fbbf24; font-size: 9px; font-weight: bold; letter-spacing: 2px;"
         )
         self.held_label.hide()
-        self._render(1)
 
-    def _render(self, face: int, dot_color: str = "#ffffff"):
-        self.svg.load(QByteArray(_make_roller_svg(face, dot_color)))
+    # ---------------------------------------------------------------- SVG ----
+    def _svg_bytes(self, face: int, dot_color: str = "#ffffff") -> bytes:
+        if self.blank:
+            return (
+                b'<svg width="80" height="80" viewBox="0 0 16 16" fill="none" '
+                b'xmlns="http://www.w3.org/2000/svg">'
+                b'<rect x="1" y="1" width="14" height="14" rx="1.5" '
+                b'fill="none" stroke="#ffffff22" stroke-width="0.75"/>'
+                b'</svg>'
+            )
+        path = _ROLLER_SVG_PATHS[face]
+        svg = (f'<svg width="80" height="80" viewBox="0 0 16 16" fill="none" '
+               f'xmlns="http://www.w3.org/2000/svg">'
+               f'<path fill-rule="evenodd" clip-rule="evenodd" '
+               f'd="{path}" fill="{dot_color}"/>'
+               f'</svg>')
+        return svg.encode()
 
-    def set_face(self, face: int, held: bool = False, rolling: bool = False,
-                 accent: str = "#e94560"):
-        self.face    = face
-        self.held    = held
-        self.rolling = rolling
-        self._render(face, accent if held else "#ffffff")
-        self.held_label.setVisible(held)
-        self.update()
+    def _render_face(self, face: int, dot_color: str) -> QPixmap:
+        renderer = QSvgRenderer(QByteArray(self._svg_bytes(face, dot_color)))
+        pix = QPixmap(self.SIZE, self.SIZE)
+        pix.fill(Qt.GlobalColor.transparent)
+        pp = QPainter(pix)
+        pp.setRenderHint(QPainter.RenderHint.Antialiasing)
+        renderer.render(pp)
+        pp.end()
+        return pix
 
+    # ---------------------------------------------------------------- paint --
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        rect = QRectF(2, 2, self.SIZE + 8, self.SIZE + 4)
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+
+        W      = self.SIZE + 12
+        cx     = W / 2
+        die_cy = (self.SIZE + 6) / 2
+
+        # ── Accent colour ─────────────────────────────────────────────────
+        accent_hex = "#ffffff"
+        accent_rgb = (255, 255, 255)
         if self.held:
-            p.setPen(QPen(QColor("#fbbf24"), 3))
-            p.setBrush(QBrush(QColor(251, 191, 36, 30)))
-        elif self.rolling:
-            p.setPen(QPen(QColor("#ffffff44"), 1))
-            p.setBrush(QBrush(QColor(255, 255, 255, 15)))
+            try:
+                h = _ROLLER_THEMES[self.parent().current_theme]["accent"].lstrip("#")
+                accent_rgb = tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
+                accent_hex = _ROLLER_THEMES[self.parent().current_theme]["accent"]
+            except Exception:
+                accent_hex = "#fbbf24"
+                accent_rgb = (251, 191, 36)
+
+        # ── Effective spin angle (snap tween overrides at end of roll) ────
+        if 0.0 <= self.snap_t < 1.0:
+            st = self.snap_t
+            ease_snap = 1.0 - (1.0 - st) ** 3
+            display_angle = self.spin_angle + (self.snap_target - self.spin_angle) * ease_snap
+        else:
+            display_angle = self.spin_angle
+
+        angle_mod    = display_angle % 360
+        x_scale      = abs(math.cos(math.radians(angle_mod)))
+        show_front   = (angle_mod < 90 or angle_mod >= 270)
+        display_face = self.visual_face if show_front else self.face
+
+        # ── Per-state values ──────────────────────────────────────────────
+        y_squash     = 1.0
+        y_offset     = 0.0
+        shadow_alpha = 40
+        opacity      = 1.0
+        glow_alpha   = 0
+
+        if self.rolling and not self.anim_settled:
+            rock         = math.sin(math.radians(self.spin_angle * 0.6)) * 0.05
+            y_squash     = 1.0 + rock
+            shadow_alpha = int(25 + 55 * x_scale)
+            opacity      = min(1.0, 0.3 + self.anim_t * 2.5)
+
+        elif 0.0 <= self.land_t < 1.0:
+            lt = self.land_t
+            if lt < 0.20:
+                y_squash = 1.0 - (lt / 0.20) * 0.28
+            elif lt < 0.55:
+                st       = (lt - 0.20) / 0.35
+                y_squash = 0.72 + st * 0.40        # 0.72 → 1.12
+                y_offset = -16.0 * math.sin(math.pi * st)
+            else:
+                rt       = (lt - 0.55) / 0.45
+                damping  = (1.0 - rt) ** 2
+                y_squash = 1.0 + 0.07 * math.cos(math.pi * rt * 4) * damping
+            shadow_alpha = max(18, int(60 - 35 * abs(y_offset / 16.0)))
+
+        elif self.held:
+            # Slow sinusoidal glow pulse on held dice
+            glow_alpha = int(28 + 22 * math.sin(math.pi * 2 * self.pulse_t))
+
+        # ── Held glow halo ────────────────────────────────────────────────
+        if glow_alpha > 0:
+            r, g, b = accent_rgb
+            p.save()
+            p.setPen(Qt.PenStyle.NoPen)
+            for spread, alpha in [(10, glow_alpha // 3), (6, glow_alpha // 2), (3, glow_alpha)]:
+                p.setBrush(QBrush(QColor(r, g, b, alpha)))
+                p.drawRoundedRect(
+                    QRectF(cx - self.SIZE / 2 - spread,
+                           die_cy - self.SIZE / 2 - spread,
+                           self.SIZE + spread * 2,
+                           self.SIZE + spread * 2),
+                    12, 12
+                )
+            p.restore()
+
+        # ── Drop shadow ────────────────────────────────────────────────────
+        if not self.blank:
+            sw = int((self.SIZE * x_scale if (self.rolling and not self.anim_settled)
+                      else self.SIZE) * 0.78)
+            sw = max(4, sw)
+            sh = max(3, int(8 * (2.0 - y_squash)))
+            sx = int(cx - sw / 2)
+            sy = int(die_cy + self.SIZE * 0.5 * y_squash + y_offset)
+            p.save()
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(QColor(0, 0, 0, shadow_alpha)))
+            p.drawEllipse(sx, sy, sw, sh)
+            p.restore()
+
+        # ── Background rect ────────────────────────────────────────────────
+        p.save()
+        active_rolling = self.rolling and not self.anim_settled
+        rect_w = max(6.0, (self.SIZE * x_scale + 8) if active_rolling else float(self.SIZE + 8))
+        rect_x = cx - rect_w / 2.0
+        if self.held:
+            r, g, b = accent_rgb
+            border_alpha = int(180 + 60 * math.sin(math.pi * 2 * self.pulse_t))
+            p.setPen(QPen(QColor(r, g, b, border_alpha), 3))
+            p.setBrush(QBrush(QColor(r, g, b, 25 + glow_alpha // 2)))
+        elif active_rolling:
+            a = int(65 * opacity * max(0.2, x_scale))
+            p.setPen(QPen(QColor(255, 255, 255, a), 1))
+            p.setBrush(QBrush(QColor(255, 255, 255, max(0, a - 50))))
         else:
             p.setPen(QPen(QColor("#ffffff22"), 1))
             p.setBrush(QBrush(QColor(255, 255, 255, 10)))
-        p.drawRoundedRect(rect, 10, 10)
+        p.drawRoundedRect(QRectF(rect_x, 2, rect_w, self.SIZE + 4), 10, 10)
+        p.restore()
+
+        # ── Die face ────────────────────────────────────────────────────────
+        if not self.blank:
+            pix    = self._render_face(display_face, accent_hex if self.held else "#ffffff")
+            draw_w = max(1, int(self.SIZE * x_scale))
+            draw_h = max(1, int(self.SIZE * y_squash))
+            draw_x = int(cx - draw_w / 2)
+            draw_y = int(die_cy - draw_h / 2 + y_offset)
+            p.save()
+            if active_rolling:
+                p.setOpacity(opacity)
+            p.drawPixmap(draw_x, draw_y, draw_w, draw_h, pix)
+            p.restore()
+
+    # ---------------------------------------------------------------- state --
+    def set_face(self, face: int, held: bool = False, rolling: bool = False,
+                 accent: str = "#e94560"):
+        self.blank       = False
+        self.face        = face
+        self.visual_face = face
+        self.held        = held
+        self.rolling     = rolling
+        self.held_label.setVisible(held)
+        self.update()
+
+    def set_blank(self):
+        self.blank        = True
+        self.rolling      = False
+        self.anim_t       = 0.0
+        self.anim_settled = False
+        self.spin_angle   = 0.0
+        self.snap_t       = -1.0
+        self.land_t       = -1.0
+        self.pulse_t      = 0.0
+        self.held_label.hide()
+        self.update()
 
     def mousePressEvent(self, event):
         self.clicked_signal()
 
     def clicked_signal(self):
-        pass   # monkey-patched by parent
-
+        pass
 
 # ============================================================================
 # ROLLER — HistoryRow
 # ============================================================================
 class RollerHistoryRow(QWidget):
-    def __init__(self, dice, label, score, accent, parent=None):
+    def __init__(self, player, dice, label, score, accent, parent=None):
         super().__init__(parent)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setContentsMargins(10, 5, 10, 5)
         layout.setSpacing(8)
 
-        dice_frame  = QWidget()
-        dice_layout = QHBoxLayout(dice_frame)
-        dice_layout.setContentsMargins(0, 0, 0, 0)
-        dice_layout.setSpacing(3)
-        for d in dice:
-            w = QSvgWidget()
-            w.setFixedSize(20, 20)
-            w.load(QByteArray(_make_roller_svg(d, accent)))
-            dice_layout.addWidget(w)
-        layout.addWidget(dice_frame)
+        if player:
+            name_lbl = QLabel(player)
+            name_lbl.setStyleSheet(
+                "color: rgba(255,255,255,0.45); font-size: 10px; font-style: italic;"
+            )
+            layout.addWidget(name_lbl)
 
         lbl = QLabel(label)
         lbl.setStyleSheet(f"color: {accent}; font-weight: bold; font-size: 12px;")
         layout.addWidget(lbl, 1)
 
+        # Mini dice
+        for d in dice:
+            w = QSvgWidget()
+            w.setFixedSize(18, 18)
+            w.load(QByteArray(_make_roller_svg(d, accent)))
+            layout.addWidget(w)
+
         pts = QLabel(f"{score} pts")
         pts.setStyleSheet("color: rgba(255,255,255,0.6); font-size: 12px;")
         layout.addWidget(pts)
+
         self.setStyleSheet("background: rgba(255,255,255,0.05); border-radius: 8px;")
 
 
@@ -232,18 +406,18 @@ def _roller_score(dice):
     vals   = sorted(counts.values(), reverse=True)
     uniq   = sorted(set(dice))
     if vals[0] == 5:
-        return ("YAHTZEE! 🎲", 50)
+        return ("YAHTZII! 🎲", 50)
     if vals[0] == 4:
         return ("Four of a Kind", total)
     if vals[0] == 3 and len(vals) > 1 and vals[1] == 2:
         return ("Full House", 25)
     if vals[0] == 3:
         return ("Three of a Kind", total)
-    span = uniq[-1] - uniq[0]
     if len(uniq) == 5:
+        span = uniq[-1] - uniq[0]
         if span == 4: return ("Large Straight", 40)
-        if span == 3: return ("Small Straight", 30)
-    if len(uniq) == 4:
+    _SMALL_RUNS = [(1,2,3,4), (2,3,4,5), (3,4,5,6)]
+    if any(all(s in uniq for s in seq) for seq in _SMALL_RUNS):
         return ("Small Straight", 30)
     if vals[0] == 2:
         return ("One Pair", total)
@@ -270,7 +444,7 @@ class YahtzeeRollerWidget(QWidget):
     def __init__(self, scorecard_mode: bool = False, parent=None):
         super().__init__(parent)
         self.scorecard_mode = scorecard_mode
-        self.setWindowTitle("Pro Yahtzee Roller")
+        self.setWindowTitle("Pro Yahtzii Roller")
         h = 780 if scorecard_mode else 720
         self.setFixedSize(520, h)
         self.setAutoFillBackground(True)
@@ -283,6 +457,7 @@ class YahtzeeRollerWidget(QWidget):
         self.roll_duration = 800
         self.history       = []
         self.current_theme = "Classic"
+        self.current_player = ""   # set by prepare_for_player in scorecard mode
         self.on_turn_done  = None   # callable(dice)
 
         self._build_ui()
@@ -311,7 +486,7 @@ class YahtzeeRollerWidget(QWidget):
         )
         root.addWidget(subtitle)
 
-        self.title_label = QLabel("YAHTZEE")
+        self.title_label = QLabel("YAHTZII")
         self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.title_label.setFont(QFont("Georgia", 36, QFont.Weight.Black))
         root.addWidget(self.title_label)
@@ -455,6 +630,18 @@ class YahtzeeRollerWidget(QWidget):
         self.timer.setInterval(self.TICK_MS)
         self.timer.timeout.connect(self._update_animation)
 
+        # Separate timer that keeps running for the landing bounce after roll ends
+        self._bounce_timer = QTimer(self)
+        self._bounce_timer.setInterval(self.TICK_MS)
+        self._bounce_timer.timeout.connect(self._tick_bounce)
+        self._land_start = time.perf_counter()
+
+        # Idle pulse timer for held dice between rolls
+        self._pulse_timer = QTimer(self)
+        self._pulse_timer.setInterval(30)   # ~33 fps is plenty for a slow glow
+        self._pulse_timer.timeout.connect(self._tick_pulse)
+        self._pulse_timer.start()
+
     # --------------------------------------------------------------- theme --
     def _apply_theme(self):
         th  = _ROLLER_THEMES[self.current_theme]
@@ -519,7 +706,14 @@ class YahtzeeRollerWidget(QWidget):
         accent  = _ROLLER_THEMES[self.current_theme]["accent"]
         rolling = (self.state == "ROLLING")
         for i, dw in enumerate(self.die_widgets):
-            dw.set_face(self.dice[i], held=self.held[i], rolling=rolling, accent=accent)
+            if not rolling or self.held[i]:
+                # Not rolling or held: set state directly and repaint
+                dw.rolling      = False
+                dw.anim_settled = True
+                dw.blank        = dw.blank and (self.rolls_left == 3)  # keep blank only pre-roll
+                dw.face         = self.dice[i]
+                dw.held         = self.held[i]
+            dw.update()
 
     def _toggle_hold(self, i: int):
         if self.state != "IDLE" or self.rolls_left == 3:
@@ -546,25 +740,143 @@ class YahtzeeRollerWidget(QWidget):
         self.timer.start()
 
     def _update_animation(self):
-        elapsed_ms = (time.perf_counter() - self.start_time) * 1000
+        now        = time.perf_counter()
+        elapsed_ms = (now - self.start_time) * 1000
+
         if self.state == "CHARGING":
             t = min(elapsed_ms / self.CHARGE_DURATION, 1.0)
             self.energy_bar.setValue(int(t * 100))
             self.energy_pct_label.setText(f"{int(t * 100)}%")
             if t >= 1.0:
                 self._start_roll()
-        elif self.state == "ROLLING":
-            t = min(elapsed_ms / self.roll_duration, 1.0)
-            self._roll_free_dice()
-            self._update_dice_display()
-            if t >= 1.0:
-                self.timer.stop()
-                self._finish_roll()
+            return
+
+        if self.state != "ROLLING":
+            return
+
+        dt_ms = (now - self._last_frame_time) * 1000
+        self._last_frame_time = now
+
+        t_global    = min(elapsed_ms / self.roll_duration, 1.0)
+        all_settled = True
+
+        for i, dw in enumerate(self.die_widgets):
+            if self.held[i]:
+                # Pulse held dice even while others are rolling
+                dw.pulse_t = (dw.pulse_t + dt_ms / 1800.0) % 1.0
+                dw.update()
+                continue
+
+            settle_t  = self._die_settle[i]
+            t_die     = min(t_global / settle_t, 1.0) if settle_t > 0 else 1.0
+            dw.anim_t = t_die
+
+            if not dw.anim_settled:
+                all_settled = False
+
+                ease          = 1.0 - (1.0 - t_die) ** 3
+                current_speed = self._die_spin_speed[i] * (1.0 - ease)
+
+                prev_angle    = dw.spin_angle
+                dw.spin_angle += current_speed * dt_ms
+
+                # On each 180° crossing swap the shown face.
+                # In the last 25% of this die's roll, bias toward the final
+                # face so the result feels earned rather than arbitrary.
+                prev_half = int(prev_angle / 180)
+                curr_half = int(dw.spin_angle / 180)
+                if curr_half > prev_half:
+                    final = self._die_final[i]
+                    bias  = ease        # 0 → 1 over the roll
+                    # Show final face with increasing probability as die slows
+                    if random.random() < bias * 0.65:
+                        dw.visual_face = final
+                    else:
+                        dw.visual_face = random.randint(1, 6)
+
+                if t_die >= 1.0:
+                    dw.anim_settled = True
+                    dw.rolling      = False
+                    self.dice[i]    = self._die_final[i]
+                    dw.face         = self._die_final[i]
+                    dw.visual_face  = self._die_final[i]
+                    # Begin smooth snap to nearest face-forward angle
+                    nearest         = round(dw.spin_angle / 360) * 360
+                    dw.snap_target  = nearest
+                    dw.snap_t       = 0.0
+                    dw._snap_start  = now
+                    # Trigger landing bounce with this die's own timestamp
+                    dw.land_t       = 0.0
+                    dw.land_start   = now
+                else:
+                    dw.rolling = True
+
+            else:
+                # Advance snap tween
+                if 0.0 <= dw.snap_t < 1.0:
+                    dw.snap_t = min((now - dw._snap_start) * 1000 / dw.SNAP_DUR, 1.0)
+                    if dw.snap_t >= 1.0:
+                        dw.spin_angle = dw.snap_target
+
+                # Advance landing bounce
+                if 0.0 <= dw.land_t < 1.0:
+                    dw.land_t = min((now - dw.land_start) * 1000 / dw.LAND_DUR, 1.0)
+
+            dw.blank = False
+            dw.update()
+
+        if t_global >= 1.0 or all_settled:
+            for i, dw in enumerate(self.die_widgets):
+                if not self.held[i]:
+                    self.dice[i]    = self._die_final[i]
+                    dw.face         = self._die_final[i]
+                    dw.visual_face  = self._die_final[i]
+                    dw.rolling      = False
+                    dw.anim_settled = True
+                    dw.blank        = False
+                    if dw.snap_t < 0.0:
+                        dw.spin_angle = round(dw.spin_angle / 360) * 360
+                    dw.update()
+            self.timer.stop()
+            self._finish_roll()
 
     def _start_roll(self):
         self.state      = "ROLLING"
         self.start_time = time.perf_counter()
         self.status_label.setText("Rolling...")
+
+        # Pre-compute final faces and per-die settle fractions
+        self._die_final = [
+            self.dice[i] if self.held[i] else random.randint(1, 6)
+            for i in range(5)
+        ]
+        # Stagger settle points: 65%–100% of total duration, shuffled
+        settle_points = sorted([random.uniform(0.65, 1.00) for _ in range(5)])
+        random.shuffle(settle_points)
+        self._die_settle = settle_points
+
+        # Per-die initial spin speed (degrees/ms) — varies for natural feel
+        self._die_spin_speed = [
+            random.uniform(1.4, 2.6) if not self.held[i] else 0.0
+            for i in range(5)
+        ]
+        # Track last frame time for delta-time spin updates
+        self._last_frame_time = time.perf_counter()
+
+        # Kick off rolling state on each free die
+        for i, dw in enumerate(self.die_widgets):
+            if not self.held[i]:
+                dw.rolling      = True
+                dw.anim_t       = 0.0
+                dw.anim_settled = False
+                dw.blank        = False
+                dw.spin_angle   = random.uniform(0, 360)
+                dw.visual_face  = dw.face
+                dw.land_t       = -1.0
+                dw.land_start   = 0.0
+                dw.snap_t       = -1.0
+                dw._snap_start  = 0.0
+                dw.pulse_t      = 0.0
 
     def _finish_roll(self):
         self.state = "IDLE"
@@ -573,6 +885,9 @@ class YahtzeeRollerWidget(QWidget):
         self.rolls_left -= 1
         self._update_dice_display()
         self._update_roll_pips()
+
+        # Keep repainting for the landing bounce duration
+        self._bounce_timer.start(self.TICK_MS)
 
         if self.rolls_left == 0:
             label, pts = _roller_score(self.dice)
@@ -603,6 +918,53 @@ class YahtzeeRollerWidget(QWidget):
         )
         self.result_frame.show()
 
+    def _tick_bounce(self):
+        """Drives landing bounce, snap tween, and held pulse repaints after roll ends."""
+        now      = time.perf_counter()
+        all_done = True
+
+        for dw in self.die_widgets:
+            needs_update = False
+
+            # Landing bounce (per-die timestamp)
+            if 0.0 <= dw.land_t < 1.0:
+                dw.land_t = min((now - dw.land_start) * 1000 / dw.LAND_DUR, 1.0)
+                needs_update = True
+                if dw.land_t < 1.0:
+                    all_done = False
+
+            # Snap tween
+            if 0.0 <= dw.snap_t < 1.0:
+                dw.snap_t = min((now - dw._snap_start) * 1000 / dw.SNAP_DUR, 1.0)
+                if dw.snap_t >= 1.0:
+                    dw.spin_angle = dw.snap_target
+                needs_update = True
+                if dw.snap_t < 1.0:
+                    all_done = False
+
+            # Held pulse — keep running indefinitely for held dice
+            if dw.held:
+                dw.pulse_t = (dw.pulse_t + self.TICK_MS / 1800.0) % 1.0
+                needs_update = True
+                all_done = False
+
+            if needs_update:
+                dw.update()
+
+        if all_done:
+            self._bounce_timer.stop()
+
+    def _tick_pulse(self):
+        """Keeps held dice pulsing between rolls."""
+        if self.state != "IDLE":
+            return
+        any_held = False
+        for i, dw in enumerate(self.die_widgets):
+            if self.held[i] and not dw.rolling:
+                dw.pulse_t = (dw.pulse_t + 30.0 / 1800.0) % 1.0
+                dw.update()
+                any_held = True
+
     def _update_roll_pips(self):
         accent = _ROLLER_THEMES[self.current_theme]["accent"]
         for i, pip in enumerate(self.pip_labels):
@@ -612,18 +974,20 @@ class YahtzeeRollerWidget(QWidget):
                 pip.setStyleSheet("font-size: 14px; color: rgba(255,255,255,0.2);")
 
     def _add_history(self, dice, label, pts):
-        self.history.insert(0, (dice, label, pts))
+        self.history.insert(0, (self.current_player, dice, label, pts))
         self.history = self.history[:6]
         while self.history_layout.count():
             item = self.history_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
         accent = _ROLLER_THEMES[self.current_theme]["accent"]
-        for d, l, s in self.history:
-            self.history_layout.addWidget(RollerHistoryRow(d, l, s, accent))
+        for player, d, l, s in self.history:
+            self.history_layout.addWidget(RollerHistoryRow(player, d, l, s, accent))
 
     def _new_round(self):
         self.timer.stop()
+        self._bounce_timer.stop()
+        self._pulse_timer.start()  # keep pulsing for any held dice
         self.dice       = [random.randint(1, 6) for _ in range(5)]
         self.held       = [False] * 5
         self.rolls_left = 3
@@ -636,7 +1000,11 @@ class YahtzeeRollerWidget(QWidget):
         self.roll_button.setEnabled(True)
         if self.scorecard_mode:
             self.use_dice_btn.setEnabled(False)
-        self._update_dice_display()
+            for dw in self.die_widgets:
+                dw.held = False
+                dw.set_blank()
+        else:
+            self._update_dice_display()
         self._update_roll_pips()
 
     # --------------------------------- scorecard integration ----------------
@@ -646,6 +1014,7 @@ class YahtzeeRollerWidget(QWidget):
 
     def prepare_for_player(self, player_name: str):
         """Reset for a new player's turn and update the banner."""
+        self.current_player = player_name
         self._new_round()
         if self.scorecard_mode and hasattr(self, "player_banner"):
             self.player_banner.setText(f"🎲  {player_name}'s Turn")
@@ -674,13 +1043,13 @@ class YahtzeeRollerWidget(QWidget):
 class RulesDialog(QDialog):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Official Yahtzee Rules")
+        self.setWindowTitle("Official Yahtzii Rules")
         self.resize(660, 750)
         layout = QVBoxLayout(self)
         rules_text = QTextEdit()
         rules_text.setReadOnly(True)
         rules_text.setHtml("""
-            <h2 style='color: #3B82F6;'>Yahtzee Pro — How to Use This App</h2>
+            <h2 style='color: #3B82F6;'>Yahtzii Pro — How to Use This App</h2>
 
             <h3 style='color: #93C5FD;'>Object of the Game</h3>
             <p>Score the highest total across all 13 categories. Highest Grand Total wins.</p>
@@ -720,12 +1089,12 @@ class RulesDialog(QDialog):
                 <li><b>Full House</b> — fixed 25 pts</li>
                 <li><b>Small Straight</b> — fixed 30 pts</li>
                 <li><b>Large Straight</b> — fixed 40 pts</li>
-                <li><b>Yahtzee</b> — fixed 50 pts</li>
+                <li><b>Yahtzii</b> — fixed 50 pts</li>
                 <li><b>Chance</b> — total of all 5 dice</li>
             </ul>
 
-            <h3 style='color: #93C5FD;'>Yahtzee Bonus &amp; Joker Rules</h3>
-            <p>Second+ Yahtzee (Yahtzee box = 50): click <b>+</b> in Yahtzee Bonus row.
+            <h3 style='color: #93C5FD;'>Yahtzii Bonus &amp; Joker Rules</h3>
+            <p>Second+ Yahtzii (Yahtzii box = 50): click <b>+</b> in Yahtzii Bonus row.
             Follow the on-screen Joker banner for priority order.</p>
 
             <h3 style='color: #93C5FD;'>Correcting a Score</h3>
@@ -748,7 +1117,7 @@ class RulesDialog(QDialog):
 class PlayerSetupDialog(QDialog):
     def __init__(self, prefill=None):
         super().__init__()
-        self.setWindowTitle("Yahtzee Registration")
+        self.setWindowTitle("Yahtzii Registration")
         self.setFixedSize(420, 560)
         self.player_inputs = []
         layout = QVBoxLayout(self)
@@ -1114,7 +1483,7 @@ class YahtzeeScorecard(QMainWindow):
         self._roller_active        = False
         self._roller_dice          = None   # list[int] once roller confirms, None otherwise
 
-        self.setWindowTitle("Yahtzee! Pro Scorecard")
+        self.setWindowTitle("Yahtzii! Pro Scorecard")
         self.resize(1100, 900)
         container = QWidget()
         self.setCentralWidget(container)
@@ -1192,9 +1561,16 @@ class YahtzeeScorecard(QMainWindow):
             'best': '', 'streak': '', 'alltime': '',
         }
         self._load_alltime_high()
-        self._streak_player = None
-        self._streak_count  = 0
+        self._streak_player  = None
+        self._streak_count   = 0
         self._last_score_msg = ""
+
+        # Theme-derived colours used by dropdown styling (updated by apply_roller_theme)
+        self._theme_accent    = CLR_ACCENT
+        self._theme_unclaimed = CLR_UNCLAIMED
+        self._theme_active    = CLR_ACTIVE_UNCLAIMED
+        self._theme_bg        = CLR_BACKGROUND
+
         self.update_turn_ui()
 
         self._elapsed      = QElapsedTimer(); self._elapsed.start()
@@ -1363,6 +1739,12 @@ class YahtzeeScorecard(QMainWindow):
         """
         self.setStyleSheet(stylesheet)
 
+        # Cache derived colours so update_turn_ui can use them for dropdowns
+        self._theme_accent   = accent
+        self._theme_unclaimed = unclaimed
+        self._theme_active   = active_unc
+        self._theme_bg       = bg
+
         # Restyle the Open Roller button to use the theme gradient
         if hasattr(self, "open_roller_btn"):
             self.open_roller_btn.setStyleSheet(
@@ -1456,16 +1838,24 @@ class YahtzeeScorecard(QMainWindow):
             if self.table.item(r, c).data(Qt.ItemDataRole.UserRole) == "claimed": continue
             self._is_updating = True
             current = combo.currentText(); combo.clear()
-            if is_active and self.joker_active:
+            if (is_active and self.joker_active
+                    and self.use_digital_roller and self._roller_dice is not None):
+                # Joker + digital roller: offer exact count for this face (always 5),
+                # or 0 if it's not the matching face (shouldn't happen per priority,
+                # but guard for completeness)
+                face  = r + 1
+                count = Counter(self._roller_dice)[face]
+                combo.addItems(["-", str(count)] if count > 0 else ["-", "0"])
+            elif is_active and self.joker_active:
                 combo.addItems(["-", "5", "0"])
             elif (is_active and self.use_digital_roller
                   and self._roller_dice is not None):
                 face  = r + 1
                 count = Counter(self._roller_dice)[face]
                 if count > 0:
-                    combo.addItems(["-", str(count)])   # real score only, no 0
+                    combo.addItems(["-", str(count)])
                 else:
-                    combo.addItems(["-", "0"])           # zero-out option, red tint applied below
+                    combo.addItems(["-", "0"])
             else:
                 combo.addItems(["-", "0", "1", "2", "3", "4", "5"])
             idx = combo.findText(current)
@@ -1489,6 +1879,28 @@ class YahtzeeScorecard(QMainWindow):
             current = combo.currentText(); combo.clear()
             if (is_active and self.use_digital_roller
                     and self._roller_dice is not None
+                    and self.joker_active):
+                # Joker + digital roller: dice are five-of-a-kind.
+                # Per Joker rules, lower boxes may be used at full value.
+                # Compute which lower boxes are available under Joker priority.
+                total     = sum(self._roller_dice)
+                joker_face = self._roller_dice[0]  # all five are the same
+                # Matching upper box status
+                upper_r   = joker_face - 1   # row index for matching upper
+                upper_claimed = (
+                    self.table.item(upper_r, c).data(Qt.ItemDataRole.UserRole) == "claimed"
+                    if self.table.item(upper_r, c) else False
+                )
+                # Lower boxes are only scoreable if matching upper is already claimed
+                if upper_claimed:
+                    fixed = FIXED_SCORE_ROWS.get(r)
+                    combo.addItems(["-", str(fixed)] if fixed else ["-", str(total)])
+                else:
+                    # Matching upper is open — player must score there first (Joker step 1)
+                    # Lower boxes show 0 only (disabled by Joker dimming in cell loop)
+                    combo.addItems(["-", "0"])
+            elif (is_active and self.use_digital_roller
+                    and self._roller_dice is not None
                     and not self.joker_active):
                 total     = sum(self._roller_dice)
                 counts    = Counter(self._roller_dice)
@@ -1511,7 +1923,7 @@ class YahtzeeScorecard(QMainWindow):
                 elif r == 13:
                     qualifies = uniq in [[1,2,3,4,5], [2,3,4,5,6]]
 
-                # Yahtzee (row 14): five of a kind
+                # Yahtzii (row 14): five of a kind
                 elif r == 14:
                     qualifies = (max_count == 5)
 
@@ -1601,14 +2013,14 @@ class YahtzeeScorecard(QMainWindow):
         if self.table.item(14, c).text() != "50":
             QMessageBox.warning(
                 self, "Rule Violation",
-                "Yahtzee Bonus requires a 50 in the Yahtzee box!"
+                "Yahtzii Bonus requires a 50 in the Yahtzii box!"
             )
             return
         item = self.table.item(15, c)
         val  = int(item.text()) + 1
         item.setText(str(val))
         self.table.cellWidget(15, c).findChild(QLabel).setText(str(val))
-        self._last_score_msg = f"Last score: {self.players[c]} → Yahtzee Bonus  +100 pts"
+        self._last_score_msg = f"Last score: {self.players[c]} → Yahtzii Bonus  +100 pts"
         self.joker_active = True
         self.recalc(c); self.update_turn_ui()
 
@@ -1694,7 +2106,7 @@ class YahtzeeScorecard(QMainWindow):
         if uniq in [[1,2,3,4,5], [2,3,4,5,6]]:
             valid.add(13)
 
-        # Yahtzee (row 14)
+        # Yahtzii (row 14)
         if vals[0] == 5:
             valid.add(14)
 
@@ -1710,12 +2122,33 @@ class YahtzeeScorecard(QMainWindow):
         if self._roller_active:
             pass   # banner already set by _open_roller_for_current_player
         elif self.joker_active:
-            self.turn_label.setText(
-                "🃏 Joker Rules Active  —  "
-                "① Score matching Upper box if open  "
-                "② Otherwise score any open Lower box  "
-                "③ If all Lower full, take 0 in any Upper box"
-            )
+            if self.use_digital_roller and self._roller_dice is not None:
+                # Tell the player exactly what they rolled and what the priority is
+                joker_face  = self._roller_dice[0]
+                face_name   = ["Ones","Twos","Threes","Fours","Fives","Sixes"][joker_face - 1]
+                upper_r     = joker_face - 1
+                upper_item  = self.table.item(upper_r, self.current_turn_index)
+                upper_claimed = (upper_item and
+                                 upper_item.data(Qt.ItemDataRole.UserRole) == "claimed")
+                if not upper_claimed:
+                    joker_msg = (
+                        f"🃏 Joker — Five {face_name}!  "
+                        f"① {face_name} box is open — you must score there."
+                    )
+                else:
+                    joker_msg = (
+                        f"🃏 Joker — Five {face_name}!  "
+                        f"① {face_name} already claimed.  "
+                        f"② Score any open Lower box at full value."
+                    )
+            else:
+                joker_msg = (
+                    "🃏 Joker Rules Active  —  "
+                    "① Score matching Upper box if open  "
+                    "② Otherwise score any open Lower box  "
+                    "③ If all Lower full, take 0 in any Upper box"
+                )
+            self.turn_label.setText(joker_msg)
             self.turn_label.setStyleSheet(
                 f"color: #3B82F6; border: 2px solid {CLR_ACCENT}; "
                 f"padding: 6px; font-size: 11px;"
@@ -1745,9 +2178,10 @@ class YahtzeeScorecard(QMainWindow):
                 c, QTableWidgetItem(f"▶  {name}" if c == curr else name)
             )
 
-        UPPER_TT      = "① Joker: score here first if this matches your five-of-a-kind number."
-        LOWER_TT      = "② Joker: score here if your matching Upper box is already claimed."
+        UPPER_TT       = "① Joker: score here first if this matches your five-of-a-kind number."
+        LOWER_TT       = "② Joker: score here if your matching Upper box is already claimed."
         ROLLER_ZERO_TT = "No score with this roll — select 0 to burn this category."
+        JOKER_BLOCKED_TT = "① Joker: your matching Upper box is open — score there first."
 
         # Pre-compute valid rows for the active player's confirmed roll (if any)
         roller_valid = (
@@ -1755,6 +2189,20 @@ class YahtzeeScorecard(QMainWindow):
             if self.use_digital_roller and self._roller_dice is not None
             else None
         )
+
+        # When Joker + roller are both active, determine which rows are
+        # scoreable under Joker priority rules given the specific dice.
+        joker_roller_state = None   # None | "must_upper" | "use_lower"
+        joker_upper_r      = None
+        if (self.joker_active and self.use_digital_roller
+                and self._roller_dice is not None):
+            joker_face    = self._roller_dice[0]
+            joker_upper_r = joker_face - 1
+            upper_item    = self.table.item(joker_upper_r, curr)
+            if upper_item and upper_item.data(Qt.ItemDataRole.UserRole) != "claimed":
+                joker_roller_state = "must_upper"   # step ①: upper box is open
+            else:
+                joker_roller_state = "use_lower"    # step ②: use any lower box
 
         # Red-tint background for zero-only cells
         CLR_ZERO_BG  = "#2D0F0F"   # dark red background
@@ -1775,49 +2223,107 @@ class YahtzeeScorecard(QMainWindow):
                 bg = (CLR_TABLE if status == "claimed"
                       else CLR_ACTIVE_UNCLAIMED if is_active else CLR_UNCLAIMED)
 
-                # Joker dimming (existing logic — truly disabled categories)
-                if is_active and self.joker_active and status == "unclaimed":
-                    if r not in LOWER_SECTION_PRIMARY and r not in UPPER_SECTION:
-                        bg = CLR_DISABLED
+                roller_zero    = False
+                joker_blocked  = False
 
-                # Roller zero-only tint: row doesn't score but player CAN burn it for 0
-                roller_zero = False
-                if (is_active and roller_valid is not None
-                        and status == "unclaimed"
-                        and not self.joker_active
-                        and r in PRIMARY_CATEGORIES
-                        and r not in roller_valid):
-                    bg = CLR_ZERO_BG
-                    roller_zero = True
+                if is_active and status == "unclaimed":
+                    if joker_roller_state == "must_upper":
+                        # Step ①: only the matching upper row is valid
+                        if r == joker_upper_r:
+                            bg = CLR_ACTIVE_UNCLAIMED   # highlight it
+                        elif r in PRIMARY_CATEGORIES:
+                            bg = CLR_DISABLED
+                            joker_blocked = True
+
+                    elif joker_roller_state == "use_lower":
+                        # Step ②: any open lower box is valid; upper is dimmed
+                        if r in LOWER_SECTION_PRIMARY:
+                            bg = CLR_ACTIVE_UNCLAIMED
+                        elif r in UPPER_SECTION:
+                            bg = CLR_DISABLED
+                            joker_blocked = True
+                        elif r not in LOWER_SECTION_PRIMARY and r in PRIMARY_CATEGORIES:
+                            bg = CLR_DISABLED
+                            joker_blocked = True
+
+                    elif self.joker_active:
+                        # Plain Joker (no roller dice): existing dim logic
+                        if r not in LOWER_SECTION_PRIMARY and r not in UPPER_SECTION:
+                            bg = CLR_DISABLED
+
+                    elif roller_valid is not None:
+                        # Pure roller (no Joker): red tint for zero-only rows
+                        if r in PRIMARY_CATEGORIES and r not in roller_valid:
+                            bg = CLR_ZERO_BG
+                            roller_zero = True
 
                 item.setBackground(QColor(bg))
-                fg = (CLR_ZERO_FG if roller_zero
+                fg = (CLR_ZERO_FG  if roller_zero
+                      else "#4A5568" if joker_blocked
                       else CLR_CLAIMED_TEXT if status == "claimed"
                       else "#F1F5F9")
                 item.setForeground(QBrush(QColor(fg)))
 
                 # Tooltips
-                if is_active and self.joker_active and status == "unclaimed":
-                    tt = (UPPER_TT if r in UPPER_SECTION
-                          else LOWER_TT if r in LOWER_SECTION_PRIMARY else "")
-                    item.setToolTip(tt)
-                    if widget: widget.setToolTip(tt)
-                elif roller_zero:
-                    item.setToolTip(ROLLER_ZERO_TT)
-                    if widget: widget.setToolTip(ROLLER_ZERO_TT)
+                if is_active and status == "unclaimed":
+                    if joker_roller_state == "must_upper" and r == joker_upper_r:
+                        tt = UPPER_TT
+                    elif joker_roller_state == "must_upper" and joker_blocked:
+                        tt = JOKER_BLOCKED_TT
+                    elif joker_roller_state == "use_lower" and r in LOWER_SECTION_PRIMARY:
+                        tt = LOWER_TT
+                    elif joker_roller_state == "use_lower" and joker_blocked:
+                        tt = JOKER_BLOCKED_TT
+                    elif self.joker_active and not joker_roller_state:
+                        tt = (UPPER_TT if r in UPPER_SECTION
+                              else LOWER_TT if r in LOWER_SECTION_PRIMARY else "")
+                    elif roller_zero:
+                        tt = ROLLER_ZERO_TT
+                    else:
+                        tt = ""
                 else:
-                    item.setToolTip("")
-                    if widget: widget.setToolTip("")
+                    tt = ""
+                item.setToolTip(tt)
+                if widget: widget.setToolTip(tt)
 
                 if widget:
-                    txt = (CLR_ZERO_FG if roller_zero
+                    txt = (CLR_ZERO_FG  if roller_zero
+                           else "#4A5568"  if joker_blocked
                            else CLR_CLAIMED_TEXT if status == "claimed"
                            else "white")
-                    widget.setStyleSheet(
-                        f"background-color: {bg}; color: {txt}; border: none;"
-                    )
+                    # Full QComboBox theming: cell bg + popup + arrow all match theme
+                    accent_c   = self._theme_accent
+                    popup_bg   = self._theme_bg
+                    popup_sel  = self._theme_active
+                    widget.setStyleSheet(f"""
+                        QComboBox {{
+                            background-color: {bg};
+                            color: {txt};
+                            border: none;
+                            padding: 1px 4px;
+                        }}
+                        QComboBox::drop-down {{
+                            border: none;
+                            width: 16px;
+                        }}
+                        QComboBox::down-arrow {{
+                            width: 8px; height: 8px;
+                            image: none;
+                            border-left: 4px solid transparent;
+                            border-right: 4px solid transparent;
+                            border-top: 5px solid {txt};
+                        }}
+                        QComboBox QAbstractItemView {{
+                            background-color: {popup_bg};
+                            color: #F1F5F9;
+                            selection-background-color: {popup_sel};
+                            selection-color: #F1F5F9;
+                            border: 1px solid {accent_c};
+                            outline: none;
+                        }}
+                    """)
                     if r != 15:
-                        widget.setEnabled(is_active)   # always enabled for active player
+                        widget.setEnabled(is_active and not joker_blocked)
 
         self.update_status_bar()
 

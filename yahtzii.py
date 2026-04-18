@@ -231,7 +231,7 @@ _ROLLER_THEMES = {
     "Storm":   {"bg": "#1a1a1a", "accent": "#a78bfa", "bar_start": "#7c3aed", "bar_end": "#a78bfa"},
     "Neon":    {"bg": "#0b0b0f", "accent": "#22d3ee", "bar_start": "#06b6d4", "bar_end": "#a21caf"},
     "Lava":    {"bg": "#220a0a", "accent": "#ef4444", "bar_start": "#dc2626", "bar_end": "#f97316"},
-    "Gold":    {"bg": "#1f1700", "accent": "#facc15", "bar_start": "#eab308", "bar_end": "#fde047"},
+    "Lemon":    {"bg": "#1f1700", "accent": "#facc15", "bar_start": "#eab308", "bar_end": "#fde047"},
     "Arctic":  {"bg": "#0b1b24", "accent": "#67e8f9", "bar_start": "#0891b2", "bar_end": "#cffafe"},
     "Cyber":   {"bg": "#12091f", "accent": "#c084fc", "bar_start": "#9333ea", "bar_end": "#ec4899"},
 }

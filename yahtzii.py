@@ -16,6 +16,12 @@ import os
 from datetime import datetime
 from collections import Counter, defaultdict
 
+SCORES_DIR = "scores"
+
+def score_path(filename):
+    os.makedirs(SCORES_DIR, exist_ok=True)
+    return os.path.join(SCORES_DIR, filename)
+
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QTableWidget, QTableWidgetItem,
@@ -25,7 +31,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QTimer, QEventLoop, QByteArray, QElapsedTimer, QRectF
 from PyQt6.QtGui import (
-    QColor, QFont, QBrush, QPainter, QPen, QPalette, QPixmap,
+    QColor, QFont, QBrush, QPainter, QPen, QPalette, QPixmap, QLinearGradient,
 )
 from PyQt6.QtSvgWidgets import QSvgWidget
 from PyQt6.QtSvg import QSvgRenderer
@@ -294,13 +300,20 @@ class DieWidget(QWidget):
         self.setFixedSize(self.SIZE + 12, self.SIZE + 30)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
-        self.held_label = QLabel("HELD", self)
+        self.held_label = QLabel("Held", self)
         self.held_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.held_label.setFixedWidth(self.SIZE + 12)
-        self.held_label.move(0, self.SIZE + 10)
-        self.held_label.setStyleSheet(
-            "color: #fbbf24; font-size: 9px; font-weight: bold; letter-spacing: 2px;"
-        )
+        self.held_label.move(0, self.SIZE + 8)
+        self.held_label.setStyleSheet("""
+            QLabel {
+                color: #fbbf24;
+                font-size: 10px;
+                font-weight: bold;
+                background-color: rgba(0,0,0,0.35);
+                border-radius: 4px;
+                padding: 2px 4px;
+            }
+        """)
         self.held_label.hide()
 
     # ---------------------------------------------------------------- SVG ----
@@ -341,17 +354,29 @@ class DieWidget(QWidget):
         cx     = W / 2
         die_cy = (self.SIZE + 6) / 2
 
-        # ── Accent colour ─────────────────────────────────────────────────
-        accent_hex = "#ffffff"
-        accent_rgb = (255, 255, 255)
-        if self.held:
-            try:
-                h = _ROLLER_THEMES[self.parent().current_theme]["accent"].lstrip("#")
-                accent_rgb = tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
-                accent_hex = _ROLLER_THEMES[self.parent().current_theme]["accent"]
-            except Exception:
-                accent_hex = "#fbbf24"
-                accent_rgb = (251, 191, 36)
+        # ── Theme colours (always resolved) ──────────────────────────────
+        _col_start = "#3B82F6"
+        _col_end   = "#93C5FD"
+        _col_accent= "#3B82F6"
+        _col_bg    = "#161B27"
+        _colored   = True
+        try:
+            th         = _ROLLER_THEMES[self.parent().current_theme]
+            _col_start = th["bar_start"]
+            _col_end   = th["bar_end"]
+            _col_accent= th["accent"]
+            _col_bg    = th["bg"]
+            _colored   = getattr(self.parent(), "colored_dice", True)
+        except Exception:
+            pass
+
+        def _parse(hx):
+            hx = hx.lstrip("#")
+            return int(hx[0:2],16), int(hx[2:4],16), int(hx[4:6],16)
+
+        sr, sg, sb = _parse(_col_start)
+        er, eg, eb = _parse(_col_end)
+        ar, ag, ab = _parse(_col_accent)
 
         # ── Effective spin angle (snap tween overrides at end of roll) ────
         if 0.0 <= self.snap_t < 1.0:
@@ -385,7 +410,7 @@ class DieWidget(QWidget):
                 y_squash = 1.0 - (lt / 0.20) * 0.28
             elif lt < 0.55:
                 st       = (lt - 0.20) / 0.35
-                y_squash = 0.72 + st * 0.40        # 0.72 → 1.12
+                y_squash = 0.72 + st * 0.40
                 y_offset = -16.0 * math.sin(math.pi * st)
             else:
                 rt       = (lt - 0.55) / 0.45
@@ -394,16 +419,38 @@ class DieWidget(QWidget):
             shadow_alpha = max(18, int(60 - 35 * abs(y_offset / 16.0)))
 
         elif self.held:
-            # Slow sinusoidal glow pulse on held dice
             glow_alpha = int(28 + 22 * math.sin(math.pi * 2 * self.pulse_t))
+
+        # ── Geometry of the die rect ──────────────────────────────────────
+        active_rolling = self.rolling and not self.anim_settled
+        rect_w = max(6.0, (self.SIZE * x_scale + 8) if active_rolling else float(self.SIZE + 8))
+        rect_x = cx - rect_w / 2.0
+        die_rect = QRectF(rect_x, 2, rect_w, self.SIZE + 4)
+
+        # ── Build gradient brush for die body ────────────────────────────
+        def _make_grad(alpha_start: int, alpha_end: int) -> QBrush:
+            if not _colored:
+                # plain dark fill — original look
+                return QBrush(QColor(255, 255, 255, 10))
+            grad = QLinearGradient(die_rect.topLeft(), die_rect.bottomRight())
+            grad.setColorAt(0.0, QColor(sr, sg, sb, alpha_start))
+            grad.setColorAt(1.0, QColor(er, eg, eb, alpha_end))
+            return QBrush(grad)
 
         # ── Held glow halo ────────────────────────────────────────────────
         if glow_alpha > 0:
-            r, g, b = accent_rgb
             p.save()
             p.setPen(Qt.PenStyle.NoPen)
             for spread, alpha in [(10, glow_alpha // 3), (6, glow_alpha // 2), (3, glow_alpha)]:
-                p.setBrush(QBrush(QColor(r, g, b, alpha)))
+                halo_grad = QLinearGradient(
+                    die_rect.topLeft(), die_rect.bottomRight()
+                ) if _colored else None
+                if halo_grad:
+                    halo_grad.setColorAt(0.0, QColor(sr, sg, sb, alpha))
+                    halo_grad.setColorAt(1.0, QColor(er, eg, eb, alpha))
+                    p.setBrush(QBrush(halo_grad))
+                else:
+                    p.setBrush(QBrush(QColor(ar, ag, ab, alpha)))
                 p.drawRoundedRect(
                     QRectF(cx - self.SIZE / 2 - spread,
                            die_cy - self.SIZE / 2 - spread,
@@ -413,10 +460,9 @@ class DieWidget(QWidget):
                 )
             p.restore()
 
-        # ── Drop shadow ────────────────────────────────────────────────────
+        # ── Drop shadow ───────────────────────────────────────────────────
         if not self.blank:
-            sw = int((self.SIZE * x_scale if (self.rolling and not self.anim_settled)
-                      else self.SIZE) * 0.78)
+            sw = int((self.SIZE * x_scale if active_rolling else self.SIZE) * 0.78)
             sw = max(4, sw)
             sh = max(3, int(8 * (2.0 - y_squash)))
             sx = int(cx - sw / 2)
@@ -427,29 +473,34 @@ class DieWidget(QWidget):
             p.drawEllipse(sx, sy, sw, sh)
             p.restore()
 
-        # ── Background rect ────────────────────────────────────────────────
+        # ── Die body (gradient fill + border) ────────────────────────────
         p.save()
-        active_rolling = self.rolling and not self.anim_settled
-        rect_w = max(6.0, (self.SIZE * x_scale + 8) if active_rolling else float(self.SIZE + 8))
-        rect_x = cx - rect_w / 2.0
         if self.held:
-            r, g, b = accent_rgb
-            border_alpha = int(180 + 60 * math.sin(math.pi * 2 * self.pulse_t))
-            p.setPen(QPen(QColor(r, g, b, border_alpha), 3))
-            p.setBrush(QBrush(QColor(r, g, b, 25 + glow_alpha // 2)))
+            # Full-opacity gradient + bright animated border
+            p.setBrush(_make_grad(230, 230))
+            border_alpha = int(200 + 55 * math.sin(math.pi * 2 * self.pulse_t))
+            if _colored:
+                border_grad = QLinearGradient(die_rect.topLeft(), die_rect.bottomRight())
+                border_grad.setColorAt(0.0, QColor(sr, sg, sb, border_alpha))
+                border_grad.setColorAt(1.0, QColor(er, eg, eb, border_alpha))
+                p.setPen(QPen(QBrush(border_grad), 2.5))
+            else:
+                p.setPen(QPen(QColor(ar, ag, ab, border_alpha), 2.5))
         elif active_rolling:
-            a = int(65 * opacity * max(0.2, x_scale))
-            p.setPen(QPen(QColor(255, 255, 255, a), 1))
-            p.setBrush(QBrush(QColor(255, 255, 255, max(0, a - 50))))
+            # Gradient fades in as die gains speed
+            a = int(opacity * 200)
+            p.setBrush(_make_grad(a, a))
+            p.setPen(QPen(QColor(255, 255, 255, int(opacity * 60)), 1))
         else:
-            p.setPen(QPen(QColor("#ffffff22"), 1))
-            p.setBrush(QBrush(QColor(255, 255, 255, 10)))
-        p.drawRoundedRect(QRectF(rect_x, 2, rect_w, self.SIZE + 4), 10, 10)
+            # Idle: full gradient body, subtle white border
+            p.setBrush(_make_grad(220, 220))
+            p.setPen(QPen(QColor(255, 255, 255, 40), 1))
+        p.drawRoundedRect(die_rect, 10, 10)
         p.restore()
 
-        # ── Die face ────────────────────────────────────────────────────────
+        # ── Die face (white dots over gradient) ──────────────────────────
         if not self.blank:
-            pix    = self._render_face(display_face, accent_hex if self.held else "#ffffff")
+            pix    = self._render_face(display_face, "#ffffff")
             draw_w = max(1, int(self.SIZE * x_scale))
             draw_h = max(1, int(self.SIZE * y_squash))
             draw_x = int(cx - draw_w / 2)
@@ -528,27 +579,55 @@ class RollerHistoryRow(QWidget):
 # ROLLER — quick-score helper
 # ============================================================================
 def _roller_score(dice):
+    """
+    Return the highest actual scorecard field available for this roll.
+
+    This intentionally uses only real scorecard categories:
+    Upper section, 3/4 of a Kind, Full House, Small/Large Straight,
+    Yahtzii, and Chance.
+    """
     counts = Counter(dice)
     total  = sum(dice)
     vals   = sorted(counts.values(), reverse=True)
     uniq   = sorted(set(dice))
-    if vals[0] == 5:
-        return ("YAHTZII! 🎲", 50)
-    if vals[0] == 4:
-        return ("Four of a Kind", total)
-    if vals[0] == 3 and len(vals) > 1 and vals[1] == 2:
-        return ("Full House", 25)
-    if vals[0] == 3:
-        return ("Three of a Kind", total)
-    if len(uniq) == 5:
-        span = uniq[-1] - uniq[0]
-        if span == 4: return ("Large Straight", 40)
-    _SMALL_RUNS = [(1,2,3,4), (2,3,4,5), (3,4,5,6)]
-    if any(all(s in uniq for s in seq) for seq in _SMALL_RUNS):
-        return ("Small Straight", 30)
-    if vals[0] == 2:
-        return ("One Pair", total)
-    return ("Chance", total)
+
+    candidates = []
+
+    def add(label, score, priority):
+        candidates.append((score, priority, label))
+
+    # Upper section
+    upper_names = ["Ones", "Twos", "Threes", "Fours", "Fives", "Sixes"]
+    for face in range(1, 7):
+        add(upper_names[face - 1], counts[face] * face, 10 + face)
+
+    # Lower section
+    max_count = vals[0] if vals else 0
+
+    if max_count >= 3:
+        add("3 of a Kind", total, 40)
+
+    if max_count >= 4:
+        add("4 of a Kind", total, 50)
+
+    if max_count == 5:
+        add("Yahtzii", 50, 90)
+
+    if max_count == 3 and len(vals) > 1 and vals[1] == 2:
+        add("Full House", 25, 60)
+
+    if any(all(s in uniq for s in seq) for seq in [(1,2,3,4), (2,3,4,5), (3,4,5,6)]):
+        add("Small Straight", 30, 70)
+
+    if uniq in [[1,2,3,4,5], [2,3,4,5,6]]:
+        add("Large Straight", 40, 80)
+
+    # Chance is always available.
+    add("Chance", total, 30)
+
+    # Highest score wins. Priority breaks ties in favor of more specific fields.
+    best_score, _, best_label = max(candidates, key=lambda x: (x[0], x[1]))
+    return (best_label, best_score)
 
 
 # ============================================================================
@@ -584,8 +663,10 @@ class YahtzeeRollerWidget(QWidget):
         self.roll_duration = 800
         self.history       = []
         self.current_theme = "Classic"
+        self.colored_dice  = True
         self.current_player = ""   # set by prepare_for_player in scorecard mode
         self.on_turn_done  = None   # callable(dice)
+        self.score_hint_provider = None   # optional callable(dice) -> (label, pts)
 
         self._build_ui()
         self._apply_theme()
@@ -842,6 +923,7 @@ class YahtzeeRollerWidget(QWidget):
                 dw.blank        = dw.blank and (self.rolls_left == 3)  # keep blank only pre-roll
                 dw.face         = self.dice[i]
                 dw.held         = self.held[i]
+                dw.held_label.setVisible(self.held[i])
             dw.update()
 
     def _toggle_hold(self, i: int):
@@ -1007,6 +1089,14 @@ class YahtzeeRollerWidget(QWidget):
                 dw._snap_start  = 0.0
                 dw.pulse_t      = 0.0
 
+    def _best_score_hint(self):
+        if callable(self.score_hint_provider):
+            try:
+                return self.score_hint_provider(list(self.dice))
+            except Exception:
+                pass
+        return _roller_score(self.dice)
+
     def _finish_roll(self):
         self.state = "IDLE"
         self.energy_bar.setValue(0)
@@ -1018,10 +1108,11 @@ class YahtzeeRollerWidget(QWidget):
         # Keep repainting for the landing bounce duration
         self._bounce_timer.start(self.TICK_MS)
 
+        label, pts = self._best_score_hint()
+        self._show_result(label, pts)
+
         if self.rolls_left == 0:
-            label, pts = _roller_score(self.dice)
-            self.status_label.setText(f"Round over!  {label} — {pts} pts")
-            self._show_result(label, pts)
+            self.status_label.setText(f"Round over!  Best open score: {label} — {pts} pts")
             self._add_history(list(self.dice), label, pts)
             self.roll_button.setEnabled(False)
             self.hold_hint.hide()
@@ -1030,9 +1121,8 @@ class YahtzeeRollerWidget(QWidget):
         else:
             rolls_word = "roll" if self.rolls_left == 1 else "rolls"
             self.status_label.setText(
-                f"{self.rolls_left} {rolls_word} left — hold dice to keep them"
+                f"{self.rolls_left} {rolls_word} left — best open score: {label} — {pts} pts"
             )
-            self.result_frame.hide()
             self.roll_button.setEnabled(True)
             self.hold_hint.show()
             if self.scorecard_mode:
@@ -1155,7 +1245,7 @@ class YahtzeeRollerWidget(QWidget):
         # Record history if the player finishes early (rolls_left > 0)
         # When rolls_left == 0 it was already recorded in _finish_roll.
         if self.rolls_left > 0:
-            label, pts = _roller_score(self.dice)
+            label, pts = self._best_score_hint()
             self._add_history(list(self.dice), label, pts)
         if self.on_turn_done:
             self.on_turn_done(list(self.dice))
@@ -1307,6 +1397,16 @@ class PlayerSetupDialog(QDialog):
         self.use_roller_chk = QCheckBox("🎲  Use Digital Roller (fully digital experience)")
         self.use_roller_chk.setStyleSheet("font-weight: bold; font-size: 12px;")
         roller_inner.addWidget(self.use_roller_chk)
+
+        self.colored_dice_chk = QCheckBox("🎨  Colored Dice (gradient theme on die faces)")
+        self.colored_dice_chk.setChecked(False)
+        self.colored_dice_chk.setStyleSheet("font-size: 11px;")
+        self.colored_dice_chk.setEnabled(False)
+        self.use_roller_chk.toggled.connect(self.colored_dice_chk.setEnabled)
+        self.use_roller_chk.toggled.connect(
+            lambda checked: self.colored_dice_chk.setChecked(False if not checked else self.colored_dice_chk.isChecked())
+        )
+        roller_inner.addWidget(self.colored_dice_chk)
         layout.addWidget(self.roller_frame)
 
         # ── Theme picker ─────────────────────────────────────────────────
@@ -1461,6 +1561,9 @@ class PlayerSetupDialog(QDialog):
 
     def use_digital_roller_enabled(self):
         return self.use_roller_chk.isChecked()
+
+    def colored_dice_enabled(self):
+        return self.colored_dice_chk.isChecked()
 
     def selected_theme(self):
         return self._selected_theme
@@ -1661,6 +1764,159 @@ class RollOffDialog(QDialog):
 # ============================================================================
 # GAME-OVER DIALOG
 # ============================================================================
+# ============================================================================
+# SCORE BREAKDOWN CHART  — pure QPainter, no extra dependencies
+# ============================================================================
+# Rows shown in the chart (primary scoring categories only, no totals/bonus rows)
+CHART_ROWS = [0, 1, 2, 3, 4, 5, 9, 10, 11, 12, 13, 14, 16]
+CHART_LABELS = [
+    "Ones", "Twos", "Threes", "Fours", "Fives", "Sixes",
+    "3-Kind", "4-Kind", "Full Hse", "Sm Str", "Lg Str", "Yahtzii", "Chance"
+]
+CHART_UPPER_COUNT = 6   # first 6 entries are upper section
+
+class ScoreBreakdownChart(QWidget):
+    """Horizontal bar chart showing each player's per-category scores."""
+
+    BAR_HEIGHT  = 16
+    ROW_GAP     = 6
+    LEFT_PAD    = 72
+    RIGHT_PAD   = 48
+    TOP_PAD     = 28
+    BOTTOM_PAD  = 16
+
+    def __init__(self, player_data: dict, parent=None):
+        """
+        player_data: {player_name: [score_or_None, ...]} aligned to CHART_ROWS.
+        """
+        super().__init__(parent)
+        self._data    = player_data
+        self._players = list(player_data.keys())
+        self._max_val = max(
+            (v for scores in player_data.values() for v in scores if v is not None),
+            default=50
+        )
+        n_rows  = len(CHART_ROWS)
+        n_players = len(self._players)
+        total_h = (self.TOP_PAD + self.BOTTOM_PAD +
+                   n_rows * (n_players * self.BAR_HEIGHT + self.ROW_GAP))
+        self.setMinimumHeight(total_h)
+        self.setMinimumWidth(460)
+
+    # Player colour palette — one per player, cycles if > 6
+    _PALETTES = [
+        ("#3B82F6", "#93C5FD"),   # blue
+        ("#34D399", "#6EE7B7"),   # green
+        ("#F97316", "#FED7AA"),   # orange
+        ("#A78BFA", "#DDD6FE"),   # purple
+        ("#F472B6", "#FBCFE8"),   # pink
+        ("#FBBF24", "#FDE68A"),   # yellow
+    ]
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        w          = self.width()
+        bar_area_w = w - self.LEFT_PAD - self.RIGHT_PAD
+        n_players  = len(self._players)
+
+        # ── section divider positions ────────────────────────────────────
+        def row_top(row_idx):
+            return (self.TOP_PAD +
+                    row_idx * (n_players * self.BAR_HEIGHT + self.ROW_GAP))
+
+        # ── title ────────────────────────────────────────────────────────
+        p.setPen(QColor("#94A3B8"))
+        p.setFont(QFont("Arial", 9, QFont.Weight.Bold))
+        p.drawText(0, 0, w, self.TOP_PAD,
+                   Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter,
+                   "Score Breakdown by Category")
+
+        # ── section backgrounds ──────────────────────────────────────────
+        upper_h = CHART_UPPER_COUNT * (n_players * self.BAR_HEIGHT + self.ROW_GAP)
+        lower_h = (len(CHART_ROWS) - CHART_UPPER_COUNT) * (n_players * self.BAR_HEIGHT + self.ROW_GAP)
+        p.fillRect(0, self.TOP_PAD, w, upper_h, QColor("#0D1525"))
+        p.fillRect(0, self.TOP_PAD + upper_h, w, lower_h, QColor("#0A1420"))
+
+        # Section labels on the right margin
+        p.setPen(QColor("#475569"))
+        p.setFont(QFont("Arial", 7))
+        p.drawText(w - self.RIGHT_PAD + 2, self.TOP_PAD,
+                   self.RIGHT_PAD - 2, upper_h,
+                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                   "UPPER")
+        p.drawText(w - self.RIGHT_PAD + 2, self.TOP_PAD + upper_h,
+                   self.RIGHT_PAD - 2, lower_h,
+                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                   "LOWER")
+
+        # ── rows ─────────────────────────────────────────────────────────
+        label_font = QFont("Arial", 8)
+        val_font   = QFont("Arial", 7, QFont.Weight.Bold)
+
+        for ri, label in enumerate(CHART_LABELS):
+            y0 = row_top(ri)
+
+            # Row label
+            p.setPen(QColor("#94A3B8"))
+            p.setFont(label_font)
+            p.drawText(0, y0, self.LEFT_PAD - 4, n_players * self.BAR_HEIGHT,
+                       Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                       label)
+
+            for pi, player in enumerate(self._players):
+                val = self._data[player][ri]
+                bar_y = y0 + pi * self.BAR_HEIGHT
+                clr_fill, clr_text = self._PALETTES[pi % len(self._PALETTES)]
+
+                if val is None or val == 0:
+                    # Zero / unclaimed — faint outline only
+                    p.setPen(QPen(QColor("#1E2740"), 1))
+                    p.setBrush(QColor("#161B27"))
+                    p.drawRoundedRect(self.LEFT_PAD, bar_y + 2,
+                                      bar_y + self.BAR_HEIGHT - 4,
+                                      self.BAR_HEIGHT - 4, 2, 2)
+                    continue
+
+                bar_w = max(4, int(bar_area_w * val / max(self._max_val, 1)))
+
+                # Bar fill with gradient feel via two rects
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(QColor(clr_fill))
+                p.drawRoundedRect(self.LEFT_PAD, bar_y + 2,
+                                  bar_w, self.BAR_HEIGHT - 4, 3, 3)
+                # Highlight strip at top of bar
+                p.setBrush(QColor(255, 255, 255, 30))
+                p.drawRoundedRect(self.LEFT_PAD, bar_y + 2,
+                                  bar_w, (self.BAR_HEIGHT - 4) // 2, 3, 3)
+
+                # Value label
+                p.setPen(QColor(clr_text))
+                p.setFont(val_font)
+                label_x = self.LEFT_PAD + bar_w + 3
+                p.drawText(label_x, bar_y, 28, self.BAR_HEIGHT,
+                           Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                           str(val))
+
+        # ── player legend ─────────────────────────────────────────────────
+        legend_y = self.TOP_PAD + len(CHART_ROWS) * (n_players * self.BAR_HEIGHT + self.ROW_GAP) + 4
+        lx = self.LEFT_PAD
+        for pi, player in enumerate(self._players):
+            clr, _ = self._PALETTES[pi % len(self._PALETTES)]
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(clr))
+            p.drawRoundedRect(lx, legend_y + 2, 10, 10, 2, 2)
+            p.setPen(QColor("#CBD5E1"))
+            p.setFont(QFont("Arial", 8))
+            p.drawText(lx + 14, legend_y, 80, 14,
+                       Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                       player)
+            lx += 14 + len(player) * 7 + 12
+
+        p.end()
+
+
 class GameOverDialog(QDialog):
     SAME_ORDER = 1
     ROLL_ORDER = 2
@@ -1668,7 +1924,7 @@ class GameOverDialog(QDialog):
     NEW_GAME   = 3
     PLACE_MEDALS = {1: "🥇", 2: "🥈", 3: "🥉"}
 
-    def __init__(self, scores, parent=None):
+    def __init__(self, scores, parent=None, player_data=None):
         super().__init__(parent)
         self.setWindowTitle("Game Over!")
         self.setMinimumWidth(380)
@@ -1710,6 +1966,36 @@ class GameOverDialog(QDialog):
             row.addWidget(sl)
             layout.addWidget(rw)
 
+        # ── Score breakdown chart ────────────────────────────────────────
+        if player_data:
+            toggle_btn = QPushButton("📊  Show Score Breakdown  ▾")
+            toggle_btn.setStyleSheet(
+                "QPushButton { background-color: #1E2740; color: #93C5FD; "
+                "border-radius: 4px; padding: 6px; font-weight: bold; }"
+                "QPushButton:hover { background-color: #253354; }"
+            )
+            layout.addWidget(toggle_btn)
+
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setStyleSheet("QScrollArea { border: 1px solid #1A2540; border-radius: 4px; }")
+            chart = ScoreBreakdownChart(player_data)
+            scroll.setWidget(chart)
+            scroll.setFixedHeight(min(chart.minimumHeight() + 4, 340))
+            scroll.setVisible(False)
+            layout.addWidget(scroll)
+
+            def toggle_chart():
+                visible = not scroll.isVisible()
+                scroll.setVisible(visible)
+                toggle_btn.setText(
+                    "📊  Hide Score Breakdown  ▴" if visible
+                    else "📊  Show Score Breakdown  ▾"
+                )
+                self.adjustSize()
+
+            toggle_btn.clicked.connect(toggle_chart)
+
         layout.addSpacing(4)
         sub = QLabel("Play again?")
         sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1748,7 +2034,7 @@ class GameOverDialog(QDialog):
 # SCORECARD
 # ============================================================================
 class YahtzeeScorecard(QMainWindow):
-    def __init__(self, players, use_digital_roller: bool = False, initial_theme: str = "Classic"):
+    def __init__(self, players, use_digital_roller: bool = False, initial_theme: str = "Classic", colored_dice: bool = True):
         super().__init__()
 
         # ── REQUIRED: all theme vars must exist before setup_board() ──
@@ -1768,6 +2054,7 @@ class YahtzeeScorecard(QMainWindow):
         self._last_unclaimed_name  = ""
         self._correction_replaced_msg = ""
         self.use_digital_roller    = use_digital_roller
+        self.colored_dice          = colored_dice
         self._roller               = None   # YahtzeeRollerWidget, created on demand
         self._roller_active        = False
         self._roller_dice          = None   # list[int] once roller confirms, None otherwise
@@ -1877,9 +2164,11 @@ class YahtzeeScorecard(QMainWindow):
     def _open_roller_for_current_player(self):
         if self._roller is None:
             self._roller = YahtzeeRollerWidget(scorecard_mode=True)
+            self._roller.colored_dice     = self.colored_dice
             self._roller.on_turn_done     = self._on_roller_done
             self._roller.on_window_hidden = self._on_roller_hidden
             self._roller.on_theme_changed = self.apply_roller_theme
+            self._roller.score_hint_provider = self._best_open_score_for_dice
             # Sync roller to the theme chosen at registration
             self._roller._set_theme(self._initial_theme)
 
@@ -2430,6 +2719,60 @@ class YahtzeeScorecard(QMainWindow):
         self.table.item(17, c).setText(str(l_sum + y_bonus))
         self.table.item(18, c).setText(str(u_sum + bonus + l_sum + y_bonus))
 
+    def _best_open_score_for_dice(self, dice: list):
+        """
+        Return the highest scoring currently unclaimed scorecard category for
+        the active player and the given dice.
+        """
+        c      = self.current_turn_index
+        counts = Counter(dice)
+        total  = sum(dice)
+        vals   = sorted(counts.values(), reverse=True)
+        uniq   = sorted(set(dice))
+        max_count = vals[0] if vals else 0
+        candidates = []
+
+        def is_open(row):
+            item = self.table.item(row, c)
+            return item is not None and item.data(Qt.ItemDataRole.UserRole) == "unclaimed"
+
+        def add(row, score, priority):
+            if is_open(row):
+                candidates.append((score, priority, ROW_LABELS[row]))
+
+        # Upper section
+        for row in UPPER_SECTION:
+            face = row + 1
+            add(row, counts[face] * face, 10 + face)
+
+        # Lower section
+        if max_count >= 3:
+            add(9, total, 40)
+
+        if max_count >= 4:
+            add(10, total, 50)
+
+        if max_count == 3 and len(vals) > 1 and vals[1] == 2:
+            add(11, 25, 60)
+
+        if any(all(s in uniq for s in seq) for seq in [(1,2,3,4), (2,3,4,5), (3,4,5,6)]):
+            add(12, 30, 70)
+
+        if uniq in [[1,2,3,4,5], [2,3,4,5,6]]:
+            add(13, 40, 80)
+
+        if max_count == 5:
+            add(14, 50, 90)
+
+        # Chance
+        add(16, total, 30)
+
+        if not candidates:
+            return ("No open scoring fields", 0)
+
+        best_score, _, best_label = max(candidates, key=lambda x: (x[0], x[1]))
+        return (best_label, best_score)
+
     # ------------------------------------------------------ UI updates ------
     def _valid_rows_for_dice(self, dice: list) -> set:
         """
@@ -2681,19 +3024,30 @@ class YahtzeeScorecard(QMainWindow):
 
     # -------------------------------------------------- status bar ----------
     def _load_alltime_high(self):
+        high_str = "🏅 Best: —"
+        low_str  = "🪦 Worst: —"
+
         try:
             if os.path.exists("yahtzee_highscores.json"):
                 with open("yahtzee_highscores.json") as f:
                     data = json.load(f)
                 if data:
                     t = data[0]
-                    self._sb_data['alltime'] = (
-                        f"🏅 All-time: {t['name']} {t['score']} pts ({t['date']})"
-                    )
-                    return
+                    high_str = f"🏅 Best: {t['name']} {t['score']} pts ({t['date']})"
         except Exception:
             pass
-        self._sb_data['alltime'] = "🏅 All-time: —"
+
+        try:
+            if os.path.exists("yahtzee_lowscores.json"):
+                with open("yahtzee_lowscores.json") as f:
+                    data = json.load(f)
+                if data:
+                    b = data[0]
+                    low_str = f"🪦 Worst: {b['name']} {b['score']} pts ({b['date']})"
+        except Exception:
+            pass
+
+        self._sb_data['alltime'] = f"{high_str}  |  {low_str}"
 
     def _render_status_bar(self):
         d = self._sb_data
@@ -2794,7 +3148,25 @@ class YahtzeeScorecard(QMainWindow):
             key=lambda x: x[1], reverse=True
         )
         self.save_high_score(scores[0][0], scores[0][1])
-        dlg    = GameOverDialog(scores, self); dlg.exec()
+        for name, score in scores:
+            self.save_low_score(name, score)
+
+        # Build per-category breakdown for the chart, keyed by player name
+        player_data = {}
+        for i, player in enumerate(self.players):
+            cat_scores = []
+            for row in CHART_ROWS:
+                item = self.table.item(row, i)
+                if item and item.data(Qt.ItemDataRole.UserRole) == "claimed":
+                    try:
+                        cat_scores.append(int(item.text()))
+                    except ValueError:
+                        cat_scores.append(0)
+                else:
+                    cat_scores.append(None)
+            player_data[player] = cat_scores
+
+        dlg    = GameOverDialog(scores, self, player_data=player_data); dlg.exec()
         choice = dlg.result_choice
         self.play_again_requested = choice in (
             GameOverDialog.SAME_ORDER, GameOverDialog.ROLL_ORDER, GameOverDialog.NEW_GAME
@@ -2804,7 +3176,7 @@ class YahtzeeScorecard(QMainWindow):
         self.close()
 
     def save_high_score(self, name, score):
-        filename    = "yahtzee_highscores.json"
+        filename    = score_path("yahtzee_highscores.json")
         scores_data = []
         if os.path.exists(filename):
             try:
@@ -2819,34 +3191,72 @@ class YahtzeeScorecard(QMainWindow):
             json.dump(scores_data, f, indent=4)
         self._load_alltime_high()
 
-    def show_high_scores(self):
-        filename = "yahtzee_highscores.json"
-        dialog   = QDialog(self)
-        dialog.setWindowTitle("Top 10 High Scores")
-        dialog.resize(350, 400)
-        dialog.setStyleSheet(DARK_STYLESHEET)
-        layout = QVBoxLayout(dialog)
-        if not os.path.exists(filename):
-            msg = QLabel("No high scores recorded yet.")
-            msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            layout.addWidget(msg)
-        else:
+    def save_low_score(self, name, score):
+        filename    = score_path("yahtzee_lowscores.json")
+        scores_data = []
+        if os.path.exists(filename):
             try:
-                with open(filename) as f: data = json.load(f)
-                tbl = QTableWidget(len(data), 3)
-                tbl.setHorizontalHeaderLabels(["Rank", "Player", "Score"])
-                tbl.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-                tbl.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-                for r, row_data in enumerate(data):
-                    tbl.setItem(r, 0, QTableWidgetItem(f"#{r+1}"))
-                    tbl.setItem(r, 1, QTableWidgetItem(row_data["name"]))
-                    tbl.setItem(r, 2, QTableWidgetItem(str(row_data["score"])))
-                layout.addWidget(tbl)
-            except Exception as e:
-                layout.addWidget(QLabel(f"Error: {e}"))
+                with open(filename) as f: scores_data = json.load(f)
+            except json.JSONDecodeError: pass
+        scores_data.append({
+            "name": name, "score": score,
+            "date": datetime.now().strftime("%Y-%m-%d")
+        })
+        scores_data = sorted(scores_data, key=lambda x: x["score"])[:10]
+        with open(filename, "w") as f:
+            json.dump(scores_data, f, indent=4)
+        self._load_alltime_high()
+
+    def show_high_scores(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("🏆 Hall of Fame  &  🪦 Hall of Shame")
+        dialog.resize(700, 430)
+        dialog.setStyleSheet(DARK_STYLESHEET)
+        main_layout = QVBoxLayout(dialog)
+        tables_row  = QHBoxLayout()
+
+        def make_table_panel(filename, label):
+            panel = QVBoxLayout()
+            title = QLabel(label)
+            title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            title.setStyleSheet("font-size: 14px; font-weight: bold; padding: 4px;")
+            panel.addWidget(title)
+            if not os.path.exists(filename):
+                msg = QLabel("No scores recorded yet.")
+                msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                panel.addWidget(msg)
+            else:
+                try:
+                    with open(filename) as f: data = json.load(f)
+                    tbl = QTableWidget(len(data), 4)
+                    tbl.setHorizontalHeaderLabels(["Rank", "Player", "Score", "Date"])
+                    tbl.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+                    tbl.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+                    for r, row_data in enumerate(data):
+                        rank_icon = ["🥇", "🥈", "🥉"][r] if r < 3 else f"#{r+1}"
+                        tbl.setItem(r, 0, QTableWidgetItem(rank_icon))
+                        tbl.setItem(r, 1, QTableWidgetItem(row_data["name"]))
+                        tbl.setItem(r, 2, QTableWidgetItem(str(row_data["score"])))
+                        tbl.setItem(r, 3, QTableWidgetItem(row_data.get("date", "")))
+                    panel.addWidget(tbl)
+                except Exception as e:
+                    panel.addWidget(QLabel(f"Error: {e}"))
+            return panel
+
+        tables_row.addLayout(make_table_panel(score_path("yahtzee_highscores.json"), "🏆 Top Scores"))
+
+        divider = QFrame()
+        divider.setFrameShape(QFrame.Shape.VLine)
+        divider.setStyleSheet("color: #2E3F60;")
+        tables_row.addWidget(divider)
+
+        tables_row.addLayout(make_table_panel(score_path("yahtzee_lowscores.json"), "🪦 Hall of Shame"))
+
+        main_layout.addLayout(tables_row)
+
         close_btn = QPushButton("Close")
         close_btn.clicked.connect(dialog.close)
-        layout.addWidget(close_btn)
+        main_layout.addWidget(close_btn)
         dialog.exec()
 
     def reset(self):
@@ -2871,10 +3281,11 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setStyleSheet(DARK_STYLESHEET)
 
-    ordered_names    = None
-    prefill_names    = None
-    use_roller_carry = False
-    theme_carry      = "Classic"
+    ordered_names      = None
+    prefill_names      = None
+    use_roller_carry   = False
+    theme_carry        = "Classic"
+    colored_dice_carry = True
 
     while True:
         # --- Registration ---
@@ -2887,8 +3298,9 @@ if __name__ == "__main__":
                 i.text().strip() or f"P{idx+1}"
                 for idx, (_, i) in enumerate(setup.player_inputs)
             ]
-            use_roller_carry = setup.use_digital_roller_enabled()
-            theme_carry      = setup.selected_theme()
+            use_roller_carry   = setup.use_digital_roller_enabled()
+            theme_carry        = setup.selected_theme()
+            colored_dice_carry = setup.colored_dice_enabled()
         else:
             names = ordered_names
 
@@ -2902,7 +3314,7 @@ if __name__ == "__main__":
             ordered_names = names
 
         # --- Game ---
-        w      = YahtzeeScorecard(ordered_names, use_digital_roller=use_roller_carry, initial_theme=theme_carry)
+        w      = YahtzeeScorecard(ordered_names, use_digital_roller=use_roller_carry, initial_theme=theme_carry, colored_dice=colored_dice_carry)
         w.loop = QEventLoop()
         w.show()
         if use_roller_carry:
@@ -2913,9 +3325,10 @@ if __name__ == "__main__":
             sys.exit(0)
 
         if getattr(w, 'new_game', False):
-            prefill_names    = ordered_names
-            ordered_names    = None
-            use_roller_carry = False   # let them choose again at registration
+            prefill_names      = ordered_names
+            ordered_names      = None
+            use_roller_carry   = False   # let them choose again at registration
+            colored_dice_carry = True
             # theme_carry preserved so registration pre-selects the last theme
             continue
 
@@ -2923,7 +3336,7 @@ if __name__ == "__main__":
             # Same Order — skip registration and rolloff entirely
             w2_names = ordered_names
             while True:
-                w2      = YahtzeeScorecard(w2_names, use_digital_roller=use_roller_carry, initial_theme=theme_carry)
+                w2      = YahtzeeScorecard(w2_names, use_digital_roller=use_roller_carry, initial_theme=theme_carry, colored_dice=colored_dice_carry)
                 w2.loop = QEventLoop()
                 w2.show()
                 if use_roller_carry:
@@ -2933,9 +3346,10 @@ if __name__ == "__main__":
                 if not getattr(w2, 'play_again_requested', False):
                     sys.exit(0)
                 if getattr(w2, 'new_game', False):
-                    prefill_names    = w2_names
-                    ordered_names    = None
-                    use_roller_carry = False
+                    prefill_names      = w2_names
+                    ordered_names      = None
+                    use_roller_carry   = False
+                    colored_dice_carry = True
                     break
                 if getattr(w2, 'roll_for_order', False):
                     ordered_names = w2_names
